@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Temporary uploads & generated assets
+uploads/docs/*
+!uploads/docs/.gitkeep
+uploads/figures/*
+!uploads/figures/.gitkeep
+
+# Logs & runtime outputs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

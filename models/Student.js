@@ -1,0 +1,40 @@
+const mongoose = require('mongoose');
+
+const StudentSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+  },
+  class: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Class',
+    required: true,
+  },
+  rollNumber: {
+    type: String,
+    required: true,
+  },
+  fatherName: {
+    type: String,
+    trim: true,
+  },
+  parent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User', // Ref to parent user
+  },
+  academicYear: {
+    type: String,
+    required: true,
+  },
+  previousYearArrears: {
+    type: Number,
+    default: 0,
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+module.exports = mongoose.model('Student', StudentSchema);
