@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "render-build": "npm install && pip install -r requirements.txt"
   },
   "dependencies": {
     "@google/generative-ai": "^0.11.0",

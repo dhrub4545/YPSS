@@ -123,7 +123,8 @@ Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`
   fs.writeFileSync(tempSvgPath, cleanSvg, 'utf-8');
 
   // Convert SVG to high-resolution PNG via Python fitz & Auto-crop top/bottom white margins via PIL ImageChops
-  const pyCmd = `python -c "import fitz, sys; from PIL import Image, ImageChops; doc = fitz.open('${tempSvgPath.replace(/\\/g, '/')}'); page = doc[0]; pix = page.get_pixmap(dpi=300); pix.save('${outputPath.replace(/\\/g, '/')}'); img = Image.open('${outputPath.replace(/\\/g, '/')}').convert('RGB'); bg = Image.new('RGB', img.size, (255, 255, 255)); diff = ImageChops.difference(img, bg); bbox = diff.getbbox(); (bbox and img.crop((max(0, bbox[0]-10), max(0, bbox[1]-10), min(img.width, bbox[2]+10), min(img.height, bbox[3]+10))).save('${outputPath.replace(/\\/g, '/')}'))"`;
+  const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
+  const pyCmd = `${pythonBin} -c "import fitz, sys; from PIL import Image, ImageChops; doc = fitz.open('${tempSvgPath.replace(/\\/g, '/')}'); page = doc[0]; pix = page.get_pixmap(dpi=300); pix.save('${outputPath.replace(/\\/g, '/')}'); img = Image.open('${outputPath.replace(/\\/g, '/')}').convert('RGB'); bg = Image.new('RGB', img.size, (255, 255, 255)); diff = ImageChops.difference(img, bg); bbox = diff.getbbox(); (bbox and img.crop((max(0, bbox[0]-10), max(0, bbox[1]-10), min(img.width, bbox[2]+10), min(img.height, bbox[3]+10))).save('${outputPath.replace(/\\/g, '/')}'))"`;
   execSync(pyCmd);
 
   console.log(`Successfully generated cropped diagram PNG (${mode} mode) at: ${outputPath}`);
