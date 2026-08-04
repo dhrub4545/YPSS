@@ -458,8 +458,10 @@ const getQuestionPaperTracker = async (req, res) => {
 
     const trackerItems = [];
 
-    classes.forEach((classItem) => {
+    (classes || []).forEach((classItem) => {
+      if (!classItem) return;
       (classItem.subjects || []).forEach((subject) => {
+        if (!subject || !subject.name) return;
         const assignedTeacher = subject.teacher;
         const isTeacherRole = req.user.role === 'teacher';
 
@@ -471,13 +473,14 @@ const getQuestionPaperTracker = async (req, res) => {
 
         const existingPaper = papers.find(
           (p) =>
+            p &&
             hasSameId(p.class, classItem._id) &&
-            p.subject.toLowerCase() === subject.name.toLowerCase()
+            (p.subject || '').toLowerCase() === (subject.name || '').toLowerCase()
         );
 
         let status = 'pending'; // Left to generate
         if (existingPaper) {
-          status = existingPaper.status; // 'completed', 'processing', 'failed'
+          status = existingPaper.status || 'pending'; // 'completed', 'processing', 'failed'
         }
 
         trackerItems.push({
