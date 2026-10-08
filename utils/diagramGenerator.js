@@ -83,26 +83,33 @@ IF THIS IS A GEOMETRY DIAGRAM / HANDWRITTEN SHAPE:
 Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`\`svg ... \`\`\` tags without extra conversational text.`;
   }
 
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
   const modelsToTry = [
-    process.env.GEMINI_MODEL,
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-    'gemini-2.0-flash-exp',
-  ].filter(Boolean);
+    primaryModel,
+    fallbackModel,
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+  ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
 
   let svgText = '';
 
-  for (const apiKey of apiKeys) {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    for (const mName of modelsToTry) {
+  for (const mName of modelsToTry) {
+    for (let i = 0; i < apiKeys.length; i++) {
+      const apiKey = apiKeys[i];
       try {
+        const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ model: mName });
         const imagePart = fileToGenerativePart(imagePath, 'image/png');
         const result = await model.generateContent([prompt, imagePart]);
         svgText = result.response.text();
-        if (svgText && svgText.includes('<svg')) break;
+        if (svgText && svgText.includes('<svg')) {
+          console.log(`Successfully generated diagram SVG using model ${mName} and Gemini API key #${i + 1}`);
+          break;
+        }
       } catch (e) {
-        // try next model or key
+        // try next key or model
       }
     }
     if (svgText && svgText.includes('<svg')) break;

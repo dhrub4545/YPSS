@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
@@ -129,24 +130,35 @@ Do not include markdown code block backticks.
 
   let result = null;
   let lastError = null;
-  const modelName = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
+  const modelsToTry = [
+    primaryModel,
+    fallbackModel,
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+  ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
 
-  for (let i = 0; i < apiKeys.length; i++) {
-    const apiKey = apiKeys[i];
-    try {
-      const client = new GoogleGenerativeAI(apiKey);
-      const model = client.getGenerativeModel({ model: modelName });
-      result = await model.generateContent([prompt, ...imageParts]);
-      console.log(`Successfully generated content using Gemini API key #${i + 1}`);
-      break;
-    } catch (error) {
-      console.warn(`Gemini API Key #${i + 1} failed (${error.message}). ${i < apiKeys.length - 1 ? 'Trying fallback key...' : ''}`);
-      lastError = error;
+  for (const mName of modelsToTry) {
+    for (let i = 0; i < apiKeys.length; i++) {
+      const apiKey = apiKeys[i];
+      try {
+        const client = new GoogleGenerativeAI(apiKey);
+        const model = client.getGenerativeModel({ model: mName });
+        result = await model.generateContent([prompt, ...imageParts]);
+        console.log(`Successfully generated content using model ${mName} and Gemini API key #${i + 1}`);
+        break;
+      } catch (error) {
+        console.warn(`Model ${mName} with Gemini API Key #${i + 1} failed (${error.message}). Trying next key/model...`);
+        lastError = error;
+      }
     }
+    if (result) break;
   }
 
   if (!result) {
-    throw new Error(`All ${apiKeys.length} Gemini API keys failed. Last error: ${lastError?.message}`);
+    throw new Error(`All Gemini models (${modelsToTry.join(', ')}) across ${apiKeys.length} API keys failed. Last error: ${lastError?.message}`);
   }
 
   const responseText = result.response.text().trim();
