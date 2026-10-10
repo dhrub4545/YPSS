@@ -4,14 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const getGeminiApiKeys = () => {
-  const keys = [];
-  ['GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3', 'GEMINI_API_KEY'].forEach((keyName) => {
-    const val = process.env[keyName]?.trim();
-    if (val && !keys.includes(val)) keys.push(val);
-  });
-  return keys;
-};
+const { getGeminiApiKeys, markKeyExhausted } = require('./geminiParser');
 
 const fileToGenerativePart = async (filePathOrUrl, mimeType) => {
   if (typeof filePathOrUrl === 'string' && (filePathOrUrl.startsWith('http://') || filePathOrUrl.startsWith('https://'))) {
@@ -138,9 +131,12 @@ Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`
             break;
           }
         } catch (e) {
+          if (e.message && (e.message.includes('429') || e.message.includes('Quota exceeded') || e.message.includes('RESOURCE_EXHAUSTED'))) {
+            markKeyExhausted(apiKey);
+          }
           console.warn(`[DiagramGenerator] Model ${mName} Key #${i + 1} (attempt ${attempt}) error: ${e.message}`);
           if (attempt < 2) {
-            await new Promise((r) => setTimeout(r, 1500));
+            await new Promise((r) => setTimeout(r, 1000));
           }
         }
       }

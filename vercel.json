@@ -8,7 +8,7 @@
   ],
   "functions": {
     "api/index.js": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "includeFiles": "{enqp_template.docx,npqp_template.docx,Markscardtemplate/**,assets/**}"
     }
   },

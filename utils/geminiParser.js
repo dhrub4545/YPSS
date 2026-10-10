@@ -61,6 +61,22 @@ const formatTermName = (examName) => {
   return `${num}th`;
 };
 
+const exhaustedKeys = new Map();
+
+const isKeyExhausted = (key) => {
+  const expiresAt = exhaustedKeys.get(key);
+  if (!expiresAt) return false;
+  if (Date.now() > expiresAt) {
+    exhaustedKeys.delete(key);
+    return false;
+  }
+  return true;
+};
+
+const markKeyExhausted = (key, durationMs = 14400000) => {
+  exhaustedKeys.set(key, Date.now() + durationMs);
+};
+
 const getGeminiApiKeys = () => {
   const keys = [];
   ['GEMINI_API_KEY_1', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3', 'GEMINI_API_KEY'].forEach((keyName) => {
@@ -75,7 +91,8 @@ const getGeminiApiKeys = () => {
       if (trimmed && !keys.includes(trimmed)) keys.push(trimmed);
     });
   }
-  return keys;
+  // Sort so available working keys are prioritized first over exhausted keys
+  return keys.sort((a, b) => (isKeyExhausted(a) ? 1 : 0) - (isKeyExhausted(b) ? 1 : 0));
 };
 
 const extractQuestionText = (q) => {
@@ -185,6 +202,9 @@ Do not include markdown code block backticks.
         console.log(`Successfully generated content using model ${mName} and Gemini API key #${i + 1}`);
         break;
       } catch (error) {
+        if (error.message && (error.message.includes('429') || error.message.includes('Quota exceeded') || error.message.includes('RESOURCE_EXHAUSTED'))) {
+          markKeyExhausted(apiKey);
+        }
         console.warn(`Model ${mName} with Gemini API Key #${i + 1} failed (${error.message}). Trying next key/model...`);
         lastError = error;
       }
@@ -285,4 +305,9 @@ Do not include markdown code block backticks.
   };
 };
 
-module.exports = { parseHandwrittenPaper };
+module.exports = {
+  parseHandwrittenPaper,
+  getGeminiApiKeys,
+  isKeyExhausted,
+  markKeyExhausted,
+};
