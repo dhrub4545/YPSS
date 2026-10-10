@@ -27,7 +27,7 @@ const sendExpoPushNotifications = async (messages) => {
   }
 };
 
-const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration }) => {
+const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration, audioUrl, messageId }) => {
   try {
     let targetUsers = [];
     if (type === 'broadcast') {
@@ -49,11 +49,16 @@ const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration 
       return;
     }
 
+    let fullAudioUrl = audioUrl;
+    if (fullAudioUrl && fullAudioUrl.startsWith('/uploads')) {
+      fullAudioUrl = `https://ypssbackend.vercel.app${fullAudioUrl}`;
+    }
+
     const title = type === 'broadcast'
       ? `📢 Walkie-Talkie: All Staff Broadcast`
       : `📻 Walkie-Talkie: ${sender.name} (${sender.role === 'principal' ? 'Principal' : 'Teacher'})`;
 
-    const body = `🎙️ ${sender.name} sent a ${duration || 3}s voice dispatch. Tap to listen!`;
+    const body = `🎙️ ${sender.name} sent a ${duration || 3}s voice dispatch. Tap ▶️ to listen!`;
 
     const pushMessages = [];
     for (const u of targetUsers) {
@@ -67,10 +72,16 @@ const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration 
               body,
               priority: 'high',
               channelId: 'walkie-talkie',
+              categoryIdentifier: 'walkie_talkie_voice',
               data: {
                 type: 'walkie-talkie',
-                senderId: sender._id,
+                messageId: messageId ? messageId.toString() : undefined,
+                senderId: sender._id ? sender._id.toString() : undefined,
                 senderName: sender.name,
+                senderRole: sender.role,
+                audioUrl: fullAudioUrl,
+                duration: duration || 3,
+                dispatchType: type,
               },
             });
           }

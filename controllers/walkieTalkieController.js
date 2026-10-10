@@ -240,6 +240,8 @@ exports.sendMessage = async (req, res) => {
       type,
       recipientId: targetRecipientId,
       duration: Number(duration) || 0,
+      audioUrl: message.audioUrl,
+      messageId: message._id,
     }).catch((pushErr) => console.warn('[WalkieTalkie] Background push notification error:', pushErr.message));
 
     res.status(201).json({
