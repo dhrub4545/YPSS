@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const {
   uploadAndParseQuestion,
+  getCloudinarySignature,
   getQuestionPaperDetails,
   getQuestionPapers,
   downloadQuestionPaper,
@@ -48,6 +49,10 @@ const fileFilter = (req, file, callback) => {
 const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } });
 
 const handleMulterUpload = (req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('multipart/form-data')) {
+    return next();
+  }
   upload.fields([
     { name: 'photo', maxCount: 10 },
     { name: 'figures', maxCount: 10 },
@@ -56,7 +61,7 @@ const handleMulterUpload = (req, res, next) => {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({
           success: false,
-          message: 'One of the photos exceeds 5MB. Please upload compressed images.',
+          message: 'One of the photos exceeds 5MB. Please upload compressed images or use direct cloud upload.',
         });
       }
       return res.status(400).json({
@@ -68,6 +73,7 @@ const handleMulterUpload = (req, res, next) => {
   });
 };
 
+router.get('/cloud-sign', protect, authorize('principal', 'teacher'), getCloudinarySignature);
 router.get('/', protect, authorize('principal', 'teacher'), getQuestionPapers);
 router.get('/tracker', protect, authorize('principal', 'teacher'), getQuestionPaperTracker);
 router.post(

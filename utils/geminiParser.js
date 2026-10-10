@@ -21,6 +21,7 @@ const fileToGenerativePart = async (filePathOrUrl, mimeType) => {
   if (!fs.existsSync(finalPath)) {
     // Check if file exists in local uploads directory by base name
     const os = require('os');
+    const base = path.basename(finalPath);
     const candidateUploads = [
       path.join(os.tmpdir(), 'ypss_uploads', base),
       path.join(os.tmpdir(), 'ypss_uploads/figures', base),

@@ -55,14 +55,57 @@ const runInBackground = (taskPromise) => {
 };
 
 
+const getCloudinarySignature = async (req, res) => {
+  try {
+    if (!process.env.CLOUDINARY_API_SECRET || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_CLOUD_NAME) {
+      return res.status(400).json({ success: false, message: 'Cloudinary storage is not configured' });
+    }
+    const timestamp = Math.floor(Date.now() / 1000);
+    const folder = 'ypss_question_papers/scans';
+    const cloudinary = require('cloudinary').v2;
+    const signature = cloudinary.utils.api_sign_request(
+      { timestamp, folder },
+      process.env.CLOUDINARY_API_SECRET
+    );
+    return res.json({
+      success: true,
+      data: {
+        timestamp,
+        folder,
+        signature,
+        apiKey: process.env.CLOUDINARY_API_KEY,
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 const uploadAndParseQuestion = async (req, res) => {
+  let cloudScans = [];
+  if (req.body.cloudScans) {
+    try {
+      cloudScans = typeof req.body.cloudScans === 'string' ? JSON.parse(req.body.cloudScans) : req.body.cloudScans;
+    } catch (_) {
+      cloudScans = [req.body.cloudScans];
+    }
+  } else if (req.body.photoUrls) {
+    try {
+      cloudScans = typeof req.body.photoUrls === 'string' ? JSON.parse(req.body.photoUrls) : req.body.photoUrls;
+    } catch (_) {
+      cloudScans = [req.body.photoUrls];
+    }
+  }
+
   const photoFiles = req.files?.['photo'] || (req.file ? [req.file] : []);
-  if (!photoFiles.length) {
+  if (!photoFiles.length && !cloudScans.length) {
     return res.status(400).json({ success: false, message: 'Choose at least one handwritten question-paper photo' });
   }
 
   const paperImagePaths = photoFiles.map((f) => f.path);
-  const primaryScanPath = paperImagePaths[0];
+  const primaryScanPath = paperImagePaths[0] || cloudScans[0];
+  const primaryScanUrl = cloudScans[0] || null;
 
   const classId = req.body.classId;
   const subject = req.body.subject?.trim();
@@ -92,7 +135,24 @@ const uploadAndParseQuestion = async (req, res) => {
 
     // Process attached question figures if any
     let figureItems = [];
-    if (req.files?.['figures']?.length) {
+    let cloudFigures = [];
+    if (req.body.cloudFigures) {
+      try {
+        cloudFigures = typeof req.body.cloudFigures === 'string' ? JSON.parse(req.body.cloudFigures) : req.body.cloudFigures;
+      } catch (_) {}
+    }
+    if (Array.isArray(cloudFigures) && cloudFigures.length) {
+      cloudFigures.forEach((fig) => {
+        const qNum = fig.questionNumber || '9';
+        const figMode = fig.mode || 'auto';
+        figureItems.push({
+          questionNumber: String(qNum).trim(),
+          mode: figMode,
+          originalImageUrl: fig.url,
+          originalImagePath: fig.url,
+        });
+      });
+    } else if (req.files?.['figures']?.length) {
       let metaList = [];
       try {
         metaList = typeof req.body.figureMeta === 'string' ? JSON.parse(req.body.figureMeta) : (req.body.figureMeta || []);
@@ -124,7 +184,9 @@ const uploadAndParseQuestion = async (req, res) => {
       passMarks,
       author: req.user._id,
       handwrittenImage: primaryScanPath,
-      handwrittenImages: paperImagePaths,
+      handwrittenImages: paperImagePaths.length ? paperImagePaths : cloudScans,
+      handwrittenImageUrl: primaryScanUrl,
+      handwrittenImageUrls: cloudScans,
       figures: figureItems,
       status: 'processing',
     });
@@ -164,6 +226,7 @@ const processPaperInBackground = async (paperId, className) => {
     // Resolve scan inputs: prioritize local existing file, fallback to Cloudinary URL
     const rawScans = paper.handwrittenImages?.length ? paper.handwrittenImages : [paper.handwrittenImage];
     const scanInput = rawScans.map((p, idx) => {
+      if (p && (p.startsWith('http://') || p.startsWith('https://'))) return p;
       if (p && fs.existsSync(p)) return p;
       if (paper.handwrittenImageUrls && paper.handwrittenImageUrls[idx]) return paper.handwrittenImageUrls[idx];
       if (paper.handwrittenImageUrl) return paper.handwrittenImageUrl;
@@ -183,9 +246,9 @@ const processPaperInBackground = async (paperId, className) => {
           console.log(`[AI Pipeline] Processing ${paper.figures.length} attached figure(s)...`);
           for (let i = 0; i < paper.figures.length; i++) {
             const fig = paper.figures[i];
-            const figSrc = (fig.originalImagePath && fs.existsSync(fig.originalImagePath))
+            const figSrc = fig.originalImageUrl || ((fig.originalImagePath && fs.existsSync(fig.originalImagePath))
               ? fig.originalImagePath
-              : (fig.originalImageUrl || fig.originalImagePath);
+              : (fig.originalImageUrl || fig.originalImagePath));
 
             if (figSrc) {
               try {
@@ -249,14 +312,16 @@ const processPaperInBackground = async (paperId, className) => {
     // Upload files online to Cloudinary if configured
     const [docxUrl, imageUrl] = await Promise.all([
       uploadToCloud(docxPath, 'ypss_question_papers/docs'),
-      uploadToCloud(paper.handwrittenImage, 'ypss_question_papers/scans'),
+      paper.handwrittenImageUrl || (paper.handwrittenImage && !paper.handwrittenImage.startsWith('http') ? uploadToCloud(paper.handwrittenImage, 'ypss_question_papers/scans') : paper.handwrittenImage),
     ]);
 
     // Upload extra handwritten scan pages if any
     const handwrittenImageUrls = [];
     if (Array.isArray(paper.handwrittenImages) && paper.handwrittenImages.length > 0) {
       for (const scanPath of paper.handwrittenImages) {
-        if (scanPath && fs.existsSync(scanPath)) {
+        if (scanPath && scanPath.startsWith('http')) {
+          handwrittenImageUrls.push(scanPath);
+        } else if (scanPath && fs.existsSync(scanPath)) {
           const scanUrl = await uploadToCloud(scanPath, 'ypss_question_papers/scans');
           if (scanUrl) handwrittenImageUrls.push(scanUrl);
         }
@@ -606,6 +671,7 @@ const retryQuestionPaper = async (req, res) => {
 
 module.exports = {
   uploadAndParseQuestion,
+  getCloudinarySignature,
   getQuestionPaperDetails,
   getQuestionPapers,
   downloadQuestionPaper,
