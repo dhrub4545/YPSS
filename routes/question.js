@@ -26,14 +26,20 @@ try {
 
 const storage = multer.diskStorage({
   destination: (req, file, callback) => callback(null, uploadDirectory),
-  filename: (req, file, callback) => callback(null, `${file.fieldname}-${Date.now()}${path.extname(file.originalname).toLowerCase()}`),
+  filename: (req, file, callback) => {
+    let ext = path.extname(file.originalname || '').toLowerCase();
+    if (!ext || ext === '.') {
+      ext = file.mimetype === 'image/png' ? '.png' : file.mimetype === 'image/webp' ? '.webp' : '.jpg';
+    }
+    callback(null, `${file.fieldname}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}${ext}`);
+  },
 });
 
 const fileFilter = (req, file, callback) => {
-  const allowedExtensions = /jpeg|jpg|png|webp/;
-  const hasAllowedExtension = allowedExtensions.test(path.extname(file.originalname).toLowerCase());
-  const hasAllowedMimeType = allowedExtensions.test(file.mimetype);
-  if (hasAllowedExtension && hasAllowedMimeType) {
+  const allowed = /jpeg|jpg|png|webp/;
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const isImage = (file.mimetype && file.mimetype.startsWith('image/')) || allowed.test(ext) || allowed.test(file.mimetype);
+  if (isImage) {
     return callback(null, true);
   }
   return callback(new Error('Only JPEG, PNG, and WebP images are accepted'), false);
@@ -41,16 +47,34 @@ const fileFilter = (req, file, callback) => {
 
 const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } });
 
+const handleMulterUpload = (req, res, next) => {
+  upload.fields([
+    { name: 'photo', maxCount: 10 },
+    { name: 'figures', maxCount: 10 },
+  ])(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({
+          success: false,
+          message: 'One of the photos exceeds 5MB. Please upload compressed images.',
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: err.message || 'Error uploading files',
+      });
+    }
+    next();
+  });
+};
+
 router.get('/', protect, authorize('principal', 'teacher'), getQuestionPapers);
 router.get('/tracker', protect, authorize('principal', 'teacher'), getQuestionPaperTracker);
 router.post(
   '/upload',
   protect,
   authorize('principal', 'teacher'),
-  upload.fields([
-    { name: 'photo', maxCount: 10 },
-    { name: 'figures', maxCount: 10 },
-  ]),
+  handleMulterUpload,
   uploadAndParseQuestion
 );
 router.post('/:id/retry', protect, authorize('principal', 'teacher'), retryQuestionPaper);

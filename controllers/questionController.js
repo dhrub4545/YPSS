@@ -41,6 +41,20 @@ const canAccessPaper = (user, paper) => user.role === 'principal' || (user.role 
 
 const { generateGeometricDiagramFromImage } = require('../utils/diagramGenerator');
 
+const runInBackground = (taskPromise) => {
+  if (process.env.VERCEL) {
+    try {
+      const { waitUntil } = require('@vercel/functions');
+      waitUntil(taskPromise);
+      return;
+    } catch (_) {}
+  }
+  Promise.resolve(taskPromise).catch((err) => {
+    console.error('[Background Task Error]:', err.message);
+  });
+};
+
+
 const uploadAndParseQuestion = async (req, res) => {
   const photoFiles = req.files?.['photo'] || (req.file ? [req.file] : []);
   if (!photoFiles.length) {
@@ -114,14 +128,12 @@ const uploadAndParseQuestion = async (req, res) => {
       figures: figureItems,
       status: 'processing',
     });
-    if (process.env.VERCEL) {
-      await processPaperInBackground(paper._id, classItem.name);
-      const freshPaper = await QuestionPaper.findById(paper._id);
-      return res.status(201).json({ success: true, message: 'Question paper generated successfully', data: freshPaper || paper });
-    } else {
-      processPaperInBackground(paper._id, classItem.name);
-      return res.status(201).json({ success: true, message: 'Question paper queued for formatting', data: paper });
-    }
+    runInBackground(processPaperInBackground(paper._id, classItem.name));
+    return res.status(201).json({
+      success: true,
+      message: 'Question paper queued for formatting',
+      data: paper,
+    });
   } catch (error) {
     photoFiles.forEach((f) => f.path && fs.unlink(f.path, () => {}));
     return res.status(500).json({ success: false, message: error.message });
@@ -581,14 +593,12 @@ const retryQuestionPaper = async (req, res) => {
     paper.status = 'processing';
     await paper.save();
 
-    if (process.env.VERCEL) {
-      await processPaperInBackground(paper._id, paper.class?.name);
-      const freshPaper = await QuestionPaper.findById(paper._id);
-      return res.json({ success: true, message: 'Paper generation completed', data: freshPaper || paper });
-    } else {
-      processPaperInBackground(paper._id, paper.class?.name);
-      return res.json({ success: true, message: 'Retrying paper generation...', data: paper });
-    }
+    runInBackground(processPaperInBackground(paper._id, paper.class?.name));
+    return res.json({
+      success: true,
+      message: 'Retrying paper generation...',
+      data: paper,
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
