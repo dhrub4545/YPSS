@@ -592,11 +592,16 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
         String(data.mode || '').toLowerCase() === 'nepali';
 
       const preferredTemplate = isNepali ? 'npqp_template.docx' : 'enqp_template.docx';
-      let templatePath = path.join(__dirname, `../${preferredTemplate}`);
-      if (!fs.existsSync(templatePath)) {
-        templatePath = path.join(__dirname, '../enqp_template.docx');
-      }
-      if (!fs.existsSync(templatePath)) {
+      const candidatePaths = [
+        path.join(__dirname, `../${preferredTemplate}`),
+        path.join(process.cwd(), preferredTemplate),
+        path.join(process.cwd(), 'backend', preferredTemplate),
+        path.join(__dirname, '../enqp_template.docx'),
+        path.join(process.cwd(), 'enqp_template.docx'),
+        path.join(process.cwd(), 'backend', 'enqp_template.docx'),
+      ];
+      let templatePath = candidatePaths.find((p) => fs.existsSync(p));
+      if (!templatePath) {
         return reject(new Error('Template file enqp_template.docx not found in backend directory'));
       }
 

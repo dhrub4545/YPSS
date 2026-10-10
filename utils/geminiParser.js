@@ -3,12 +3,49 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
 
-const fileToGenerativePart = (filePath, mimeType) => ({
-  inlineData: {
-    data: Buffer.from(fs.readFileSync(filePath)).toString('base64'),
-    mimeType,
-  },
-});
+const fileToGenerativePart = async (filePathOrUrl, mimeType) => {
+  if (typeof filePathOrUrl === 'string' && (filePathOrUrl.startsWith('http://') || filePathOrUrl.startsWith('https://'))) {
+    const res = await fetch(filePathOrUrl);
+    if (!res.ok) throw new Error(`Failed to download image from ${filePathOrUrl} (status ${res.status})`);
+    const arrayBuf = await res.arrayBuffer();
+    const resolvedMime = mimeType || res.headers.get('content-type') || 'image/jpeg';
+    return {
+      inlineData: {
+        data: Buffer.from(arrayBuf).toString('base64'),
+        mimeType: resolvedMime.includes('png') ? 'image/png' : 'image/jpeg',
+      },
+    };
+  }
+
+  let finalPath = filePathOrUrl;
+  if (!fs.existsSync(finalPath)) {
+    // Check if file exists in local uploads directory by base name
+    const os = require('os');
+    const candidateUploads = [
+      path.join(os.tmpdir(), 'ypss_uploads', base),
+      path.join(os.tmpdir(), 'ypss_uploads/figures', base),
+      path.join(os.tmpdir(), 'ypss_uploads/docs', base),
+      path.join(__dirname, '../uploads', base),
+      path.join(__dirname, '../uploads/figures', base),
+      path.join(__dirname, '../uploads/docs', base),
+    ];
+    const found = candidateUploads.find((p) => fs.existsSync(p));
+    if (found) {
+      finalPath = found;
+    } else {
+      throw new Error(`Image file not found: ${base}. Please upload the photo again.`);
+    }
+  }
+
+  const ext = path.extname(finalPath).toLowerCase();
+  const resolvedMime = mimeType || (ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg');
+  return {
+    inlineData: {
+      data: Buffer.from(fs.readFileSync(finalPath)).toString('base64'),
+      mimeType: resolvedMime,
+    },
+  };
+};
 
 const NepaliDate = require('nepali-date-converter').default || require('nepali-date-converter');
 
@@ -82,11 +119,13 @@ const parseHandwrittenPaper = async (imageInput, subject, className, examName) =
     throw new Error('No handwritten paper scan provided');
   }
 
-  const imageParts = imagePaths.map((p) => {
-    const ext = path.extname(p).toLowerCase();
-    const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-    return fileToGenerativePart(p, mimeType);
-  });
+  const imageParts = await Promise.all(
+    imagePaths.map((p) => {
+      const ext = path.extname(p).toLowerCase();
+      const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+      return fileToGenerativePart(p, mimeType);
+    })
+  );
 
   const termOrd = formatTermName(examName);
   const nepaliYear = `${new NepaliDate().getYear()} B.S.`;
@@ -130,22 +169,17 @@ Do not include markdown code block backticks.
 
   let result = null;
   let lastError = null;
-  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
-  const modelsToTry = [
-    primaryModel,
-    fallbackModel,
-    'gemini-3.8-flash',
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-  ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.7-flash'];
 
   for (const mName of modelsToTry) {
     for (let i = 0; i < apiKeys.length; i++) {
       const apiKey = apiKeys[i];
       try {
         const client = new GoogleGenerativeAI(apiKey);
-        const model = client.getGenerativeModel({ model: mName });
+        const model = client.getGenerativeModel({
+          model: mName,
+          generationConfig: { maxOutputTokens: 8192 },
+        });
         result = await model.generateContent([prompt, ...imageParts]);
         console.log(`Successfully generated content using model ${mName} and Gemini API key #${i + 1}`);
         break;
@@ -162,8 +196,25 @@ Do not include markdown code block backticks.
   }
 
   const responseText = result.response.text().trim();
-  const cleanJson = responseText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const parsed = JSON.parse(cleanJson);
+  let cleanJson = responseText;
+  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (jsonMatch) {
+    cleanJson = jsonMatch[1].trim();
+  } else {
+    const firstBrace = responseText.indexOf('{');
+    const lastBrace = responseText.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleanJson = responseText.substring(firstBrace, lastBrace + 1).trim();
+    }
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(cleanJson);
+  } catch (parseErr) {
+    console.error('[GeminiParser] Failed to parse JSON response. Raw output:\n', responseText);
+    throw new Error(`AI generated invalid response format: ${parseErr.message}`);
+  }
 
   let rawQuestions = [];
   if (Array.isArray(parsed.questions) && parsed.questions.length) {

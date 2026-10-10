@@ -11,9 +11,11 @@ const {
   recordDirectPayment,
   downloadReceiptPdf,
   pushFeeAlerts,
+  triggerMonthlyFeeCron,
 } = require('../controllers/feeController');
 const { protect, authorize } = require('../middleware/auth');
 
+router.all('/cron', triggerMonthlyFeeCron);
 router.get('/class-structures', protect, authorize('principal'), getClassFeeStructures);
 router.post('/class-structure', protect, authorize('principal'), updateClassFeeStructure);
 router.get('/current-month-status', protect, authorize('principal'), getCurrentMonthStudentFeeStatus);

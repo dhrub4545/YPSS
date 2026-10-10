@@ -13,12 +13,45 @@ const getGeminiApiKeys = () => {
   return keys;
 };
 
-const fileToGenerativePart = (filePath, mimeType) => ({
-  inlineData: {
-    data: Buffer.from(fs.readFileSync(filePath)).toString('base64'),
-    mimeType,
-  },
-});
+const fileToGenerativePart = async (filePathOrUrl, mimeType) => {
+  if (typeof filePathOrUrl === 'string' && (filePathOrUrl.startsWith('http://') || filePathOrUrl.startsWith('https://'))) {
+    const res = await fetch(filePathOrUrl);
+    if (!res.ok) throw new Error(`Failed to download diagram image from ${filePathOrUrl}`);
+    const arrayBuf = await res.arrayBuffer();
+    const contentType = res.headers.get('content-type') || '';
+    const resolvedMime = mimeType || (contentType.includes('png') ? 'image/png' : contentType.includes('webp') ? 'image/webp' : 'image/jpeg');
+    return {
+      inlineData: {
+        data: Buffer.from(arrayBuf).toString('base64'),
+        mimeType: resolvedMime,
+      },
+    };
+  }
+
+  let finalPath = filePathOrUrl;
+  if (!fs.existsSync(finalPath)) {
+    const os = require('os');
+    const base = path.basename(finalPath);
+    const candidateUploads = [
+      path.join(os.tmpdir(), 'ypss_uploads/figures', base),
+      path.join(os.tmpdir(), 'ypss_uploads', base),
+      path.join(__dirname, '../uploads/figures', base),
+      path.join(__dirname, '../uploads', base),
+    ];
+    const found = candidateUploads.find((p) => fs.existsSync(p));
+    if (found) finalPath = found;
+  }
+
+  const ext = path.extname(finalPath).toLowerCase();
+  const resolvedMime = mimeType || (ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg');
+
+  return {
+    inlineData: {
+      data: Buffer.from(fs.readFileSync(finalPath)).toString('base64'),
+      mimeType: resolvedMime,
+    },
+  };
+};
 
 async function generateGeometricDiagramFromImage(imagePath, outputPath, mode = 'auto') {
   const apiKeys = getGeminiApiKeys();
@@ -83,34 +116,35 @@ IF THIS IS A GEOMETRY DIAGRAM / HANDWRITTEN SHAPE:
 Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`\`svg ... \`\`\` tags without extra conversational text.`;
   }
 
-  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
-  const modelsToTry = [
-    primaryModel,
-    fallbackModel,
-    'gemini-3.8-flash',
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-  ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.7-flash'];
 
   let svgText = '';
 
   for (const mName of modelsToTry) {
     for (let i = 0; i < apiKeys.length; i++) {
       const apiKey = apiKeys[i];
-      try {
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: mName });
-        const imagePart = fileToGenerativePart(imagePath, 'image/png');
-        const result = await model.generateContent([prompt, imagePart]);
-        svgText = result.response.text();
-        if (svgText && svgText.includes('<svg')) {
-          console.log(`Successfully generated diagram SVG using model ${mName} and Gemini API key #${i + 1}`);
-          break;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const genAI = new GoogleGenerativeAI(apiKey);
+          const model = genAI.getGenerativeModel({
+            model: mName,
+            generationConfig: { maxOutputTokens: 8192 },
+          });
+          const imagePart = await fileToGenerativePart(imagePath);
+          const result = await model.generateContent([prompt, imagePart]);
+          svgText = result.response.text();
+          if (svgText && svgText.includes('<svg')) {
+            console.log(`Successfully generated diagram SVG using model ${mName} and Gemini API key #${i + 1}`);
+            break;
+          }
+        } catch (e) {
+          console.warn(`[DiagramGenerator] Model ${mName} Key #${i + 1} (attempt ${attempt}) error: ${e.message}`);
+          if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, 1500));
+          }
         }
-      } catch (e) {
-        // try next key or model
       }
+      if (svgText && svgText.includes('<svg')) break;
     }
     if (svgText && svgText.includes('<svg')) break;
   }
@@ -120,19 +154,36 @@ Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`
   }
 
   // Extract SVG snippet
+  let cleanSvg = '';
   const svgMatch = svgText.match(/<svg[\s\S]*?<\/svg>/i);
-  if (!svgMatch) {
+  if (svgMatch) {
+    cleanSvg = svgMatch[0];
+  } else {
+    const openIdx = svgText.indexOf('<svg');
+    if (openIdx !== -1) {
+      cleanSvg = svgText.slice(openIdx).replace(/```.*/gs, '').trim();
+      if (!cleanSvg.includes('</svg>')) cleanSvg += '\n</svg>';
+    }
+  }
+
+  if (!cleanSvg || !cleanSvg.includes('<svg')) {
     throw new Error('No valid <svg> element found in AI response');
   }
 
-  const cleanSvg = svgMatch[0];
   const tempSvgPath = outputPath.replace(/\.[^.]+$/, '.svg');
   fs.writeFileSync(tempSvgPath, cleanSvg, 'utf-8');
 
-  // Convert SVG to high-resolution PNG via Python fitz & Auto-crop top/bottom white margins via PIL ImageChops
-  const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
-  const pyCmd = `${pythonBin} -c "import fitz, sys; from PIL import Image, ImageChops; doc = fitz.open('${tempSvgPath.replace(/\\/g, '/')}'); page = doc[0]; pix = page.get_pixmap(dpi=300); pix.save('${outputPath.replace(/\\/g, '/')}'); img = Image.open('${outputPath.replace(/\\/g, '/')}').convert('RGB'); bg = Image.new('RGB', img.size, (255, 255, 255)); diff = ImageChops.difference(img, bg); bbox = diff.getbbox(); (bbox and img.crop((max(0, bbox[0]-10), max(0, bbox[1]-10), min(img.width, bbox[2]+10), min(img.height, bbox[3]+10))).save('${outputPath.replace(/\\/g, '/')}'))"`;
-  execSync(pyCmd);
+  // Convert SVG to high-resolution PNG via Python fitz & Auto-crop top/bottom white margins via PIL ImageChops (if Python is present)
+  try {
+    const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
+    const pyCmd = `${pythonBin} -c "import fitz, sys; from PIL import Image, ImageChops; doc = fitz.open('${tempSvgPath.replace(/\\/g, '/')}'); page = doc[0]; pix = page.get_pixmap(dpi=300); pix.save('${outputPath.replace(/\\/g, '/')}'); img = Image.open('${outputPath.replace(/\\/g, '/')}').convert('RGB'); bg = Image.new('RGB', img.size, (255, 255, 255)); diff = ImageChops.difference(img, bg); bbox = diff.getbbox(); (bbox and img.crop((max(0, bbox[0]-10), max(0, bbox[1]-10), min(img.width, bbox[2]+10), min(img.height, bbox[3]+10))).save('${outputPath.replace(/\\/g, '/')}'))"`;
+    execSync(pyCmd, { stdio: 'pipe' });
+  } catch (pyErr) {
+    console.warn(`[DiagramGenerator] Python rendering unavailable in environment (${pyErr.message}). Retaining SVG output.`);
+    if (!fs.existsSync(outputPath) && fs.existsSync(tempSvgPath)) {
+      fs.copyFileSync(tempSvgPath, outputPath);
+    }
+  }
 
   console.log(`Successfully generated cropped diagram PNG (${mode} mode) at: ${outputPath}`);
   return outputPath;

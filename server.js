@@ -33,9 +33,27 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded files statically
+// Database connection readiness middleware for stateless/serverless requests
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (dbErr) {
+    console.error('Database connection failed for request:', dbErr.message);
+    res.status(503).json({
+      success: false,
+      message: 'Database is currently connecting or unavailable. Please retry in a moment.',
+    });
+  }
+});
+
+// Serve uploaded files statically (fallback to os.tmpdir when in serverless)
 const path = require('path');
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+const os = require('os');
+const uploadsStaticDir = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'ypss_uploads')
+  : path.join(__dirname, 'uploads');
+app.use('/uploads', express.static(uploadsStaticDir));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -64,12 +82,16 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-  try {
-    const { startMonthlyFeeScheduler } = require('./utils/monthlyFeeScheduler');
-    startMonthlyFeeScheduler();
-  } catch (e) {
-    console.error('Failed to start monthly fee scheduler:', e.message);
-  }
-});
+if (require.main === module && !process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
+    try {
+      const { startMonthlyFeeScheduler } = require('./utils/monthlyFeeScheduler');
+      startMonthlyFeeScheduler();
+    } catch (e) {
+      console.error('Failed to start monthly fee scheduler:', e.message);
+    }
+  });
+}
+
+module.exports = app;

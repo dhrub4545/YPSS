@@ -333,9 +333,12 @@ const downloadClassAttendancePDF = async (req, res) => {
 
     sortByRollNumber(recordsList);
 
-    const tempDir = path.join(__dirname, '../uploads/temp');
+    const os = require('os');
+    const tempDir = path.join(os.tmpdir(), 'ypss_temp');
     if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+      try {
+        fs.mkdirSync(tempDir, { recursive: true });
+      } catch (_) {}
     }
 
     const cleanClassName = classRecord.name.replace(/[^a-zA-Z0-9]/g, '_');
@@ -349,14 +352,11 @@ const downloadClassAttendancePDF = async (req, res) => {
     );
 
     const downloadFileName = `YPSS_Attendance_${cleanClassName}_${targetDate}.pdf`;
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${downloadFileName}"`);
-
-    return res.sendFile(pdfPath, (err) => {
+    return res.download(pdfPath, downloadFileName, (err) => {
       if (err) console.error('PDF Send Error:', err);
-      setTimeout(() => {
+      try {
         if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
-      }, 5000);
+      } catch (_) {}
     });
   } catch (error) {
     console.error('Download Attendance PDF Error:', error);

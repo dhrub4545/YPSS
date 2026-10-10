@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index.js"
+    }
+  ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60,
+      "includeFiles": [
+        "enqp_template.docx",
+        "npqp_template.docx",
+        "Markscardtemplate/**",
+        "assets/**"
+      ]
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/fees/cron",
+      "schedule": "0 0 1 * *"
+    }
+  ]
+}

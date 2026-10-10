@@ -86,6 +86,9 @@ const QuestionPaperSchema = new mongoose.Schema({
     enum: ['processing', 'completed', 'failed'],
     default: 'processing',
   },
+  failureReason: {
+    type: String,
+  },
   createdAt: {
     type: Date,
     default: Date.now,

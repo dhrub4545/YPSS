@@ -4,54 +4,85 @@ const Student = require('../models/Student');
 const Fee = require('../models/Fee');
 const Notice = require('../models/Notice');
 
-let lastNotificationMonth = '';
-
-const checkAndTriggerMonthlyFeeNotifications = async () => {
+/**
+ * Idempotent, stateless check for monthly fee notifications.
+ * Verifies against MongoDB records rather than in-memory variables,
+ * making it 100% safe to invoke from Vercel Serverless / Vercel Cron.
+ */
+const checkAndTriggerMonthlyFeeNotifications = async (force = false) => {
   try {
     const today = new Date();
-    const currentMonthKey = `${today.getFullYear()}-${today.getMonth() + 1}-01`;
+    const isFirstDay = today.getDate() === 1;
 
-    // Trigger automatically on the 1st day of the calendar month once per month
-    if (today.getDate() === 1 && lastNotificationMonth !== currentMonthKey) {
-      lastNotificationMonth = currentMonthKey;
-
-      const students = await Student.find().populate('user class');
-      const allFees = await Fee.find().lean();
-
-      let count = 0;
-      for (const student of students) {
-        const studentFees = allFees.filter((f) => String(f.student) === String(student._id));
-        const totalDue = studentFees.reduce((acc, f) => acc + (f.amountDue || 0), 0);
-        const totalPaid = studentFees.reduce((acc, f) => acc + (f.amountPaid || 0), 0);
-        const remaining = Math.max(0, totalDue - totalPaid);
-
-        if (remaining > 0) {
-          count++;
-          const studentName = student.user?.name || 'Student';
-          const className = student.class?.name || 'Class';
-          const nepaliDateStr = new NepaliDate(today).format('YYYY-MM-DD');
-
-          await Notice.create({
-            title: `🗓️ Monthly Fee Reminder: ${studentName}`,
-            content: `Default Monthly Fee Notice (${nepaliDateStr} B.S.):\nDear Parent & Student, this is an automated fee reminder for ${studentName} (${className}, Roll #${student.rollNumber || '—'}). Remaining fee balance: NPR ${remaining.toLocaleString()}.\nKindly make payment at the school accounts section or via digital transfer at your earliest convenience. Thank you!`,
-            category: 'fee',
-            audience: 'all',
-            dateBS: `${nepaliDateStr} B.S.`,
-          });
-        }
-      }
-      console.log(`[Monthly Fee Scheduler] Sent default 1st-of-month fee notifications to ${count} accounts.`);
+    // Only run on the 1st day of the month unless explicitly forced by manual/cron trigger
+    if (!isFirstDay && !force) {
+      return { triggered: false, count: 0, reason: 'Not 1st day of month' };
     }
+
+    const nepaliDateStr = new NepaliDate(today).format('YYYY-MM-DD');
+    const targetDateBS = `${nepaliDateStr} B.S.`;
+
+    const students = await Student.find().populate('user class');
+    const allFees = await Fee.find().lean();
+
+    let count = 0;
+    for (const student of students) {
+      const studentFees = allFees.filter((f) => String(f.student) === String(student._id));
+      const totalDue = studentFees.reduce((acc, f) => acc + (f.amountDue || 0), 0);
+      const totalPaid = studentFees.reduce((acc, f) => acc + (f.amountPaid || 0), 0);
+      const remaining = Math.max(0, totalDue - totalPaid);
+
+      if (remaining > 0) {
+        const studentName = student.user?.name || 'Student';
+        const expectedTitle = `🗓️ Monthly Fee Reminder: ${studentName}`;
+
+        // Check MongoDB directly to ensure zero duplicate notifications across serverless invocations
+        const alreadyNotified = await Notice.findOne({
+          category: 'fee',
+          title: expectedTitle,
+          dateBS: targetDateBS,
+        });
+
+        if (alreadyNotified && !force) {
+          continue;
+        }
+
+        count++;
+        const className = student.class?.name || 'Class';
+
+        await Notice.create({
+          title: expectedTitle,
+          content: `Default Monthly Fee Notice (${targetDateBS}):\nDear Parent & Student, this is an automated fee reminder for ${studentName} (${className}, Roll #${student.rollNumber || '—'}). Remaining fee balance: NPR ${remaining.toLocaleString()}.\nKindly make payment at the school accounts section or via digital transfer at your earliest convenience. Thank you!`,
+          category: 'fee',
+          audience: 'all',
+          dateBS: targetDateBS,
+        });
+      }
+    }
+
+    console.log(`[Monthly Fee Scheduler] Sent default monthly fee notifications to ${count} accounts.`);
+    return { triggered: true, count, dateBS: targetDateBS };
   } catch (err) {
     console.error('[Monthly Fee Scheduler Error]', err.message);
+    return { triggered: false, error: err.message };
   }
 };
 
 const startMonthlyFeeScheduler = () => {
-  // Initial check on boot
-  checkAndTriggerMonthlyFeeNotifications();
-  // Check every 4 hours
-  setInterval(checkAndTriggerMonthlyFeeNotifications, 4 * 60 * 60 * 1000);
+  // Serverless environments (like Vercel) freeze background intervals; crons are handled via HTTP endpoint
+  if (process.env.VERCEL) {
+    console.log('[Monthly Fee Scheduler] Running in serverless mode (Vercel). Interval timer bypassed.');
+    return;
+  }
+
+  // Standalone/dev execution: run initial check and 4-hour background interval
+  checkAndTriggerMonthlyFeeNotifications().catch(console.error);
+  setInterval(() => {
+    checkAndTriggerMonthlyFeeNotifications().catch(console.error);
+  }, 4 * 60 * 60 * 1000);
 };
 
-module.exports = { startMonthlyFeeScheduler, checkAndTriggerMonthlyFeeNotifications };
+module.exports = {
+  startMonthlyFeeScheduler,
+  checkAndTriggerMonthlyFeeNotifications,
+};

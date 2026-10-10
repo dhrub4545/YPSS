@@ -10,11 +10,23 @@ const http = require('http');
 
 const hasSameId = (left, right) => String(left?._id || left || '') === String(right?._id || right || '');
 
+const os = require('os');
+
+const getUploadDir = (subDir = '') => {
+  const base = process.env.VERCEL
+    ? path.join(os.tmpdir(), 'ypss_uploads')
+    : path.join(__dirname, '../uploads');
+  const target = subDir ? path.join(base, subDir) : base;
+  try {
+    fs.mkdirSync(target, { recursive: true });
+  } catch (_) {}
+  return target;
+};
+
 const setupUploadDirs = () => {
-  [
-    path.join(__dirname, '../uploads'),
-    path.join(__dirname, '../uploads/docs'),
-  ].forEach((directory) => fs.mkdirSync(directory, { recursive: true }));
+  getUploadDir();
+  getUploadDir('docs');
+  getUploadDir('figures');
 };
 
 const canCreateForSubject = (user, classItem, subject) => {
@@ -102,8 +114,14 @@ const uploadAndParseQuestion = async (req, res) => {
       figures: figureItems,
       status: 'processing',
     });
-    processPaperInBackground(paper._id, classItem.name);
-    return res.status(201).json({ success: true, message: 'Question paper queued for formatting', data: paper });
+    if (process.env.VERCEL) {
+      await processPaperInBackground(paper._id, classItem.name);
+      const freshPaper = await QuestionPaper.findById(paper._id);
+      return res.status(201).json({ success: true, message: 'Question paper generated successfully', data: freshPaper || paper });
+    } else {
+      processPaperInBackground(paper._id, classItem.name);
+      return res.status(201).json({ success: true, message: 'Question paper queued for formatting', data: paper });
+    }
   } catch (error) {
     photoFiles.forEach((f) => f.path && fs.unlink(f.path, () => {}));
     return res.status(500).json({ success: false, message: error.message });
@@ -117,7 +135,28 @@ const processPaperInBackground = async (paperId, className) => {
     setupUploadDirs();
 
     console.log(`[AI Pipeline] Starting background processing for Paper ID: ${paper._id}`);
-    const scanInput = paper.handwrittenImages?.length ? paper.handwrittenImages : paper.handwrittenImage;
+
+    // Pre-upload scans to Cloudinary to ensure they are preserved for retries even after local cleanup
+    if (!paper.handwrittenImageUrl && paper.handwrittenImage && fs.existsSync(paper.handwrittenImage)) {
+      try {
+        const cloudUrl = await uploadToCloud(paper.handwrittenImage, 'ypss_question_papers/scans');
+        if (cloudUrl) {
+          paper.handwrittenImageUrl = cloudUrl;
+          await paper.save();
+        }
+      } catch (uploadErr) {
+        console.warn('[CloudStorage] Failed pre-upload scan to cloud:', uploadErr.message);
+      }
+    }
+
+    // Resolve scan inputs: prioritize local existing file, fallback to Cloudinary URL
+    const rawScans = paper.handwrittenImages?.length ? paper.handwrittenImages : [paper.handwrittenImage];
+    const scanInput = rawScans.map((p, idx) => {
+      if (p && fs.existsSync(p)) return p;
+      if (paper.handwrittenImageUrls && paper.handwrittenImageUrls[idx]) return paper.handwrittenImageUrls[idx];
+      if (paper.handwrittenImageUrl) return paper.handwrittenImageUrl;
+      return p;
+    });
 
     // Wait for BOTH AI text OCR transcription and AI geometrical figure generation concurrently
     const [parsedContent] = await Promise.all([
@@ -132,18 +171,21 @@ const processPaperInBackground = async (paperId, className) => {
           console.log(`[AI Pipeline] Processing ${paper.figures.length} attached figure(s)...`);
           for (let i = 0; i < paper.figures.length; i++) {
             const fig = paper.figures[i];
-            if (fig.originalImagePath && fs.existsSync(fig.originalImagePath)) {
+            const figSrc = (fig.originalImagePath && fs.existsSync(fig.originalImagePath))
+              ? fig.originalImagePath
+              : (fig.originalImageUrl || fig.originalImagePath);
+
+            if (figSrc) {
               try {
-                const figureDir = path.join(__dirname, '../uploads/figures');
-                fs.mkdirSync(figureDir, { recursive: true });
+                const figureDir = getUploadDir('figures');
                 const genPath = path.join(figureDir, `fig_${paper._id}_${fig.questionNumber}_${Date.now()}.png`);
                 console.log(`[AI Pipeline] Requesting AI diagram (${fig.mode || 'auto'} mode) for Q.${fig.questionNumber}...`);
-                await generateGeometricDiagramFromImage(fig.originalImagePath, genPath, fig.mode || 'auto');
+                await generateGeometricDiagramFromImage(figSrc, genPath, fig.mode || 'auto');
                 paper.figures[i].generatedImagePath = genPath;
                 console.log(`[AI Pipeline] AI diagram created at: ${genPath}`);
               } catch (err) {
                 console.warn(`[AI Pipeline] Figure diagram generation fallback for Q.${fig.questionNumber}:`, err.message);
-                paper.figures[i].generatedImagePath = fig.originalImagePath;
+                paper.figures[i].generatedImagePath = figSrc;
               }
             }
           }
@@ -187,7 +229,7 @@ const processPaperInBackground = async (paperId, className) => {
 
     const baseName = `YPSS_${paper.subject.replace(/\s+/g, '_')}_Terminal_${paper.examTerm}_${Date.now()}`;
     const docxFileName = `${baseName}.docx`;
-    const docxPath = path.join(__dirname, '../uploads/docs', docxFileName);
+    const docxPath = path.join(getUploadDir('docs'), docxFileName);
 
     console.log('[DocxGenerator] Compiling MS Word .docx document with figures...');
     await generateQuestionDocx(parsedContent, docxPath, plainFigures);
@@ -265,8 +307,11 @@ const processPaperInBackground = async (paperId, className) => {
       }
     });
   } catch (error) {
-    console.error(`Question paper processing failed for ${paperId}:`, error.message);
-    await QuestionPaper.findByIdAndUpdate(paperId, { status: 'failed' });
+    console.error(`[AI Pipeline Error] Question paper processing failed for ${paperId}:`, error);
+    await QuestionPaper.findByIdAndUpdate(paperId, {
+      status: 'failed',
+      failureReason: error.message || String(error) || 'Generation failed',
+    });
   }
 };
 
@@ -357,10 +402,18 @@ const downloadQuestionPaper = async (req, res) => {
     }
 
     const storedPath = format === 'pdf' ? paper.pdfPath : paper.docxPath;
-    const uploadRoot = path.resolve(__dirname, '../uploads');
-    const filePath = storedPath ? path.resolve(__dirname, '..', storedPath.replace(/^\//, '')) : null;
+    let filePath = null;
+    if (storedPath) {
+      const fileName = path.basename(storedPath);
+      const candidates = [
+        path.join(getUploadDir('docs'), fileName),
+        path.join(getUploadDir(), fileName),
+        path.resolve(__dirname, '..', storedPath.replace(/^\//, '')),
+      ];
+      filePath = candidates.find((p) => fs.existsSync(p));
+    }
 
-    if (filePath && filePath.startsWith(uploadRoot) && fs.existsSync(filePath)) {
+    if (filePath && fs.existsSync(filePath)) {
       return res.download(filePath, fileName);
     } else {
       return res.status(404).json({ success: false, message: 'Generated file not found' });
@@ -528,8 +581,14 @@ const retryQuestionPaper = async (req, res) => {
     paper.status = 'processing';
     await paper.save();
 
-    processPaperInBackground(paper._id, paper.class?.name);
-    return res.json({ success: true, message: 'Retrying paper generation...', data: paper });
+    if (process.env.VERCEL) {
+      await processPaperInBackground(paper._id, paper.class?.name);
+      const freshPaper = await QuestionPaper.findById(paper._id);
+      return res.json({ success: true, message: 'Paper generation completed', data: freshPaper || paper });
+    } else {
+      processPaperInBackground(paper._id, paper.class?.name);
+      return res.json({ success: true, message: 'Retrying paper generation...', data: paper });
+    }
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

@@ -27,12 +27,8 @@ async function testGeminiModels() {
     process.exit(1);
   }
 
-  const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
-  const testModels = [primaryModel, fallbackModel];
-
-  console.log(`[TEST] Primary Model: ${primaryModel}`);
-  console.log(`[TEST] Fallback Model: ${fallbackModel}`);
+  const testModels = ['gemini-3.8-flash', 'gemini-3.7-flash'];
+  console.log(`[TEST] Targeted Models: ${testModels.join(', ')}`);
 
   const testResults = {};
 

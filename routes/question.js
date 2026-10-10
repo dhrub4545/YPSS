@@ -13,9 +13,16 @@ const {
 } = require('../controllers/questionController');
 const { protect, authorize } = require('../middleware/auth');
 
+const os = require('os');
 const router = express.Router();
-const uploadDirectory = path.join(__dirname, '../uploads');
-fs.mkdirSync(uploadDirectory, { recursive: true });
+
+const uploadDirectory = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'ypss_uploads')
+  : path.join(__dirname, '../uploads');
+
+try {
+  fs.mkdirSync(uploadDirectory, { recursive: true });
+} catch (_) {}
 
 const storage = multer.diskStorage({
   destination: (req, file, callback) => callback(null, uploadDirectory),

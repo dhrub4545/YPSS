@@ -1001,6 +1001,24 @@ const pushFeeAlerts = async (req, res) => {
   }
 };
 
+const { checkAndTriggerMonthlyFeeNotifications } = require('../utils/monthlyFeeScheduler');
+
+const triggerMonthlyFeeCron = async (req, res) => {
+  try {
+    if (process.env.CRON_SECRET) {
+      const authHeader = req.headers.authorization;
+      if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+        return res.status(401).json({ success: false, message: 'Unauthorized cron request' });
+      }
+    }
+    const force = req.query.force === 'true' || req.body?.force === true;
+    const result = await checkAndTriggerMonthlyFeeNotifications(force);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   generateFeeBill,
   recordPayment,
@@ -1012,4 +1030,5 @@ module.exports = {
   recordDirectPayment,
   downloadReceiptPdf,
   pushFeeAlerts,
+  triggerMonthlyFeeCron,
 };

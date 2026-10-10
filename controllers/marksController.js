@@ -174,8 +174,11 @@ const downloadMarksCard = async (req, res) => {
       return res.status(404).json({ success: false, message: 'No marks records found for this terminal' });
     }
 
-    const temporaryDirectory = path.join(__dirname, '../temp_marks');
-    fs.mkdirSync(temporaryDirectory, { recursive: true });
+    const os = require('os');
+    const temporaryDirectory = path.join(os.tmpdir(), 'ypss_temp_marks');
+    try {
+      fs.mkdirSync(temporaryDirectory, { recursive: true });
+    } catch (_) {}
     const downloadName = `YPSS_${student.user.name.replace(/\s+/g, '_')}_Terminal_${terminal}.pdf`;
     const outputPath = path.join(temporaryDirectory, `${student._id}_${terminal}_${Date.now()}.pdf`);
     await generateMarksCardPDF({

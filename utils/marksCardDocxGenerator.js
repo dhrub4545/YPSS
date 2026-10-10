@@ -241,9 +241,14 @@ const generateStudentMarksCard = async ({
   dataMap['remarks'] = hasFailedSubject ? 'Needs Improvement' : overallGradeObj.remark;
 
   const templateFileName = TEMPLATE_FILES[termNum];
-  const templatePath = path.join(__dirname, '../Markscardtemplate', templateFileName);
-  if (!fs.existsSync(templatePath)) {
-    throw new Error(`Marks card template file not found at ${templatePath}`);
+  const candidateTemplatePaths = [
+    path.join(__dirname, '../Markscardtemplate', templateFileName),
+    path.join(process.cwd(), 'Markscardtemplate', templateFileName),
+    path.join(process.cwd(), 'backend/Markscardtemplate', templateFileName),
+  ];
+  const templatePath = candidateTemplatePaths.find((p) => fs.existsSync(p));
+  if (!templatePath) {
+    throw new Error(`Marks card template file not found: ${templateFileName}`);
   }
 
   const zip = new PizZip(fs.readFileSync(templatePath));
@@ -251,10 +256,14 @@ const generateStudentMarksCard = async ({
   const updatedXml = cleanDocxXmlPlaceholders(xml, dataMap);
   zip.file('word/document.xml', updatedXml);
 
-  const outputDirDocx = path.join(__dirname, '../uploads/markscards/docs');
-  const outputDirPdf = path.join(__dirname, '../uploads/markscards/pdf');
-  fs.mkdirSync(outputDirDocx, { recursive: true });
-  fs.mkdirSync(outputDirPdf, { recursive: true });
+  const os = require('os');
+  const baseTmp = process.env.VERCEL ? os.tmpdir() : path.join(__dirname, '..');
+  const outputDirDocx = path.join(baseTmp, 'uploads/markscards/docs');
+  const outputDirPdf = path.join(baseTmp, 'uploads/markscards/pdf');
+  try {
+    fs.mkdirSync(outputDirDocx, { recursive: true });
+    fs.mkdirSync(outputDirPdf, { recursive: true });
+  } catch (_) {}
 
   const safeStudentName = (student.user?.name || 'Student').replace(/\s+/g, '_');
   const fileBase = `YPSS_MarksCard_${safeStudentName}_Term_${termNum}_${Date.now()}`;
