@@ -65,6 +65,7 @@ app.use('/api/questions', require('./routes/question'));
 app.use('/api/attendance', require('./routes/attendanceRoutes'));
 app.use('/api/academic-years', require('./routes/academicYear'));
 app.use('/api/notices', require('./routes/noticeRoutes'));
+app.use('/api/walkie-talkie', require('./routes/walkieTalkie'));
 
 // Basic route
 app.get('/', (req, res) => {
