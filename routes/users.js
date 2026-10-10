@@ -7,9 +7,11 @@ const {
   createManagedUser,
   updateManagedUser,
   removeUser,
+  registerPushToken,
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middleware/auth');
 
+router.post('/push-token', protect, registerPushToken);
 router.get('/teachers', protect, authorize('principal'), getTeachers);
 router.get('/parents', protect, authorize('principal'), getParents);
 router.get('/students', protect, authorize('principal'), getStudents);

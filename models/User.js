@@ -37,6 +37,9 @@ const UserSchema = new mongoose.Schema({
     enum: ['en', 'np'],
     default: 'en',
   },
+  pushTokens: [{
+    type: String,
+  }],
   createdAt: {
     type: Date,
     default: Date.now,

@@ -6,6 +6,7 @@ const WalkieTalkieConfig = require('../models/WalkieTalkieConfig');
 const WalkieTalkieMessage = require('../models/WalkieTalkieMessage');
 const User = require('../models/User');
 const { uploadToCloud, isCloudinaryConfigured } = require('../utils/cloudStorage');
+const { notifyWalkieTalkieDispatch } = require('../utils/pushNotifier');
 
 const getOrCreateConfig = async () => {
   let config = await WalkieTalkieConfig.findOne();
@@ -232,6 +233,14 @@ exports.sendMessage = async (req, res) => {
     });
 
     console.log(`[WalkieTalkie] Voice dispatch created: type=${type}, sender=${req.user.name} (${req.user.role}), duration=${duration}s`);
+
+    // Wake up locked or backgrounded phones via High-Priority Expo Push Notification
+    notifyWalkieTalkieDispatch({
+      sender: req.user,
+      type,
+      recipientId: targetRecipientId,
+      duration: Number(duration) || 0,
+    }).catch((pushErr) => console.warn('[WalkieTalkie] Background push notification error:', pushErr.message));
 
     res.status(201).json({
       success: true,

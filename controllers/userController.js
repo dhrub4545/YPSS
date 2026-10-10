@@ -224,6 +224,24 @@ const removeUser = async (req, res) => {
   }
 };
 
+const registerPushToken = async (req, res) => {
+  try {
+    const { pushToken } = req.body;
+    if (!pushToken || typeof pushToken !== 'string') {
+      return res.status(400).json({ success: false, message: 'Valid pushToken string is required' });
+    }
+
+    await User.findByIdAndUpdate(req.user._id, {
+      $addToSet: { pushTokens: pushToken.trim() },
+    });
+
+    console.log(`[PushToken] Registered push token for user ${req.user.name} (${req.user.role})`);
+    return res.json({ success: true, message: 'Push token registered successfully' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getTeachers,
   getParents,
@@ -231,4 +249,5 @@ module.exports = {
   createManagedUser,
   updateManagedUser,
   removeUser,
+  registerPushToken,
 };
