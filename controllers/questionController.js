@@ -254,10 +254,12 @@ const processPaperInBackground = async (paperId, className) => {
               try {
                 const figureDir = getUploadDir('figures');
                 const genPath = path.join(figureDir, `fig_${paper._id}_${fig.questionNumber}_${Date.now()}.png`);
-                console.log(`[AI Pipeline] Requesting AI diagram (${fig.mode || 'auto'} mode) for Q.${fig.questionNumber}...`);
-                await generateGeometricDiagramFromImage(figSrc, genPath, fig.mode || 'auto');
-                paper.figures[i].generatedImagePath = genPath;
-                console.log(`[AI Pipeline] AI diagram created at: ${genPath}`);
+                const genResult = await generateGeometricDiagramFromImage(figSrc, genPath, fig.mode || 'auto');
+                paper.figures[i].generatedImagePath = (genResult && typeof genResult === 'object' && genResult.outputPath) ? genResult.outputPath : genPath;
+                if (genResult && typeof genResult === 'object' && genResult.imageUrl) {
+                  paper.figures[i].generatedImageUrl = genResult.imageUrl;
+                }
+                console.log(`[AI Pipeline] AI diagram created at: ${paper.figures[i].generatedImagePath}`);
               } catch (err) {
                 console.warn(`[AI Pipeline] Figure diagram generation fallback for Q.${fig.questionNumber}:`, err.message);
                 paper.figures[i].generatedImagePath = figSrc;

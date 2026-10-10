@@ -2,6 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
+const cloudinary = require('cloudinary').v2;
+
+if (process.env.CLOUDINARY_CLOUD_NAME) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+}
 
 const extractQuestionText = (q) => {
   if (typeof q === 'string') return q;
@@ -312,6 +321,58 @@ const normalizeAndSplitSubquestions = (text, qNum) => {
   return processedLines.join('\n');
 };
 
+const resolveImageBuffer = async (imgSource) => {
+  if (!imgSource) return null;
+  if (typeof imgSource === 'string' && (imgSource.startsWith('http://') || imgSource.startsWith('https://'))) {
+    try {
+      const res = await fetch(imgSource);
+      if (res.ok) {
+        return Buffer.from(await res.arrayBuffer());
+      }
+    } catch (err) {
+      console.warn(`[WordGenerator] Failed to fetch image from URL: ${imgSource}`, err.message);
+    }
+    return null;
+  }
+  if (typeof imgSource === 'string' && fs.existsSync(imgSource)) {
+    try {
+      return fs.readFileSync(imgSource);
+    } catch (err) {
+      console.warn(`[WordGenerator] Failed to read local image: ${imgSource}`, err.message);
+    }
+  }
+  return null;
+};
+
+const getImageDimensions = (buffer) => {
+  if (!buffer || !Buffer.isBuffer(buffer)) return { width: 900, height: 220 };
+  try {
+    if (buffer.length >= 24 && buffer[0] === 0x89 && buffer.toString('ascii', 1, 4) === 'PNG') {
+      const width = buffer.readUInt32BE(16);
+      const height = buffer.readUInt32BE(20);
+      if (width > 0 && height > 0) return { width, height };
+    }
+    if (buffer.length >= 4 && buffer[0] === 0xFF && buffer[1] === 0xD8) {
+      let offset = 2;
+      while (offset < buffer.length - 8) {
+        if (buffer[offset] !== 0xFF) break;
+        const marker = buffer[offset + 1];
+        if (marker === 0xC0 || marker === 0xC2) {
+          const height = buffer.readUInt16BE(offset + 5);
+          const width = buffer.readUInt16BE(offset + 7);
+          if (width > 0 && height > 0) return { width, height };
+          break;
+        }
+        const length = buffer.readUInt16BE(offset + 2);
+        offset += 2 + length;
+      }
+    }
+  } catch (e) {
+    console.warn('[WordGenerator] Dimension detection fallback:', e.message);
+  }
+  return { width: 900, height: 220 };
+};
+
 const getPngDimensions = (filePath) => {
   if (!filePath || !fs.existsSync(filePath)) return { width: 900, height: 220 };
   try {
@@ -330,8 +391,19 @@ const getPngDimensions = (filePath) => {
   return { width: 900, height: 220 };
 };
 
-const calculateWordDrawingExtent = (imgPath) => {
-  const { width, height } = getPngDimensions(imgPath);
+const calculateWordDrawingExtent = (target) => {
+  let width = 900;
+  let height = 220;
+
+  if (target && typeof target === 'object') {
+    width = target.width || 900;
+    height = target.height || 220;
+  } else if (typeof target === 'string') {
+    const dims = getPngDimensions(target);
+    width = dims.width;
+    height = dims.height;
+  }
+
   const aspectRatio = width / Math.max(1, height);
 
   const fullColumnWidthEMU = 5200000; // ~5.46 inches wide
@@ -340,8 +412,8 @@ const calculateWordDrawingExtent = (imgPath) => {
 
   if (aspectRatio >= 3.0) {
     cy = Math.min(1400000, Math.max(850000, Math.round(fullColumnWidthEMU / aspectRatio)));
-  } else if (cy > 2600000) {
-    cy = 2600000;
+  } else if (cy > 3200000) {
+    cy = 3200000;
     cx = Math.round(cy * aspectRatio);
   } else if (cy < 750000) {
     cy = 750000;
@@ -350,7 +422,7 @@ const calculateWordDrawingExtent = (imgPath) => {
   return { cx, cy };
 };
 
-const buildQuestionXml = (qNum, rawText, marksText, figureImgId = null, figurePath = null) => {
+const buildQuestionXml = (qNum, rawText, marksText, figureImgId = null, figurePath = null, figureDimensions = null, drawingId = 100) => {
   const text = normalizeAndSplitSubquestions(rawText, qNum);
   const rawLines = String(text || '').split('\n');
   const blocks = [];
@@ -490,19 +562,19 @@ const buildQuestionXml = (qNum, rawText, marksText, figureImgId = null, figurePa
 
   // If a figure diagram image is attached to this question, embed it directly under the question with calculated extents
   if (figureImgId) {
-    const { cx, cy } = calculateWordDrawingExtent(figurePath);
+    const { cx, cy } = calculateWordDrawingExtent(figureDimensions || figurePath);
     resultXml += `
 <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="60" w:after="80"/></w:pPr>
   <w:r>
     <w:drawing>
       <wp:inline distT="0" distB="0" distL="0" distR="0">
         <wp:extent cx="${cx}" cy="${cy}"/>
-        <wp:docPr id="100" name="Figure"/>
+        <wp:docPr id="${drawingId}" name="Figure ${drawingId}"/>
         <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
           <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
             <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
               <pic:nvPicPr>
-                <pic:cNvPr id="100" name="Figure"/>
+                <pic:cNvPr id="${drawingId}" name="Figure ${drawingId}"/>
                 <pic:cNvPicPr/>
               </pic:nvPicPr>
               <pic:blipFill>
@@ -582,7 +654,7 @@ const toNepaliSubject = (subVal) => {
  * @param {Array} figures Optional attached figures [{ questionNumber, imagePath, generatedImagePath }]
  */
 const generateQuestionDocx = async (data, outputPath, figures = []) => {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     try {
       const isNepali =
         data.template === 'npqp' ||
@@ -611,16 +683,55 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
       // Handle figure image embeddings
       const figureMap = {};
       let relsXml = zip.file('word/_rels/document.xml.rels')?.asText() || '';
+      let ctXml = zip.file('[Content_Types].xml')?.asText() || '';
+      let ctModified = false;
 
       if (Array.isArray(figures) && figures.length > 0) {
-        figures.forEach((fig, idx) => {
-          const imgFile = fig.generatedImagePath || fig.originalImagePath || fig.imagePath || fig.path;
-          if (imgFile && fs.existsSync(imgFile)) {
+        for (let idx = 0; idx < figures.length; idx++) {
+          const fig = figures[idx];
+          const candidate =
+            fig.generatedImagePath ||
+            fig.generatedImageUrl ||
+            fig.originalImagePath ||
+            fig.originalImageUrl ||
+            fig.imagePath ||
+            fig.path;
+
+          let imgBuf = await resolveImageBuffer(candidate);
+          if (!imgBuf && (fig.originalImagePath || fig.originalImageUrl)) {
+            imgBuf = await resolveImageBuffer(fig.originalImageUrl || fig.originalImagePath);
+          }
+
+          if (imgBuf && imgBuf.length > 0) {
+            // If the buffer is SVG XML text, rasterize to true binary PNG via Cloudinary
+            if (imgBuf[0] === 0x3C || imgBuf.toString('utf-8', 0, 50).includes('<svg')) {
+              try {
+                if (cloudinary && process.env.CLOUDINARY_CLOUD_NAME) {
+                  const base64Data = 'data:image/svg+xml;base64,' + imgBuf.toString('base64');
+                  const uploadRes = await cloudinary.uploader.upload(base64Data, {
+                    folder: 'ypss_question_papers/figures',
+                    format: 'png',
+                    resource_type: 'image',
+                    transformation: [{ effect: 'trim' }],
+                  });
+                  if (uploadRes && uploadRes.secure_url) {
+                    const pngRes = await fetch(uploadRes.secure_url);
+                    if (pngRes.ok) {
+                      imgBuf = Buffer.from(await pngRes.arrayBuffer());
+                    }
+                  }
+                }
+              } catch (svgErr) {
+                console.warn('[WordGenerator] SVG on-the-fly rasterization fallback failed:', svgErr.message);
+              }
+            }
+
+            const isJpeg = imgBuf[0] === 0xFF && imgBuf[1] === 0xD8;
+            const ext = isJpeg ? 'jpeg' : 'png';
             const relId = `rIdFig_${idx + 10}`;
-            const targetMedia = `media/figure_${idx + 1}.png`;
+            const targetMedia = `media/figure_${idx + 1}.${ext}`;
 
             // Add image file into Word zip archive
-            const imgBuf = fs.readFileSync(imgFile);
             zip.file(`word/${targetMedia}`, imgBuf);
 
             // Add Relationship entry in document.xml.rels
@@ -629,16 +740,30 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
               relsXml = relsXml.replace('</Relationships>', `${relEntry}</Relationships>`);
             }
 
+            // Ensure [Content_Types].xml includes the image format
+            if (isJpeg && !ctXml.includes('Extension="jpeg"')) {
+              ctXml = ctXml.replace('</Types>', '<Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="jpg" ContentType="image/jpeg"/></Types>');
+              ctModified = true;
+            }
+            if (!ctXml.includes('Extension="png"')) {
+              ctXml = ctXml.replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>');
+              ctModified = true;
+            }
+
+            const dimensions = getImageDimensions(imgBuf);
             const rawQNum = String(fig.questionNumber || fig.qNum || '').trim();
             const cleanQNum = normalizeDigits(rawQNum);
-            const figData = { relId, imgFile };
+            const figData = { relId, imgFile: candidate, dimensions };
 
             if (cleanQNum) figureMap[cleanQNum] = figData;
             if (rawQNum) figureMap[rawQNum] = figData;
             figureMap[`idx_${idx}`] = figData;
           }
-        });
+        }
         zip.file('word/_rels/document.xml.rels', relsXml);
+        if (ctModified) {
+          zip.file('[Content_Types].xml', ctXml);
+        }
       }
 
       // Clean up XML tags in memory to sanitize any Word bracket typos in enqp_template.docx
@@ -689,6 +814,7 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
 
       const usedRelIds = new Set();
       const sortedQuestionItems = [];
+      let drawingCounter = 100;
 
       // 1. Process OCR questions from handwritten paper
       allQuestions.forEach((q, idx) => {
@@ -705,12 +831,14 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
 
         let matchingRelId = null;
         let matchingImgFile = null;
+        let matchingDimensions = null;
 
         const tryMatch = (key) => {
           const entry = figureMap[key];
           if (entry && !usedRelIds.has(entry.relId)) {
             matchingRelId = entry.relId;
             matchingImgFile = entry.imgFile;
+            matchingDimensions = entry.dimensions;
             return true;
           }
           return false;
@@ -729,6 +857,7 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
             const entry = figureMap[`idx_${matchedFigIdx}`];
             matchingRelId = entry.relId;
             matchingImgFile = entry.imgFile;
+            matchingDimensions = entry.dimensions;
           }
         }
 
@@ -757,9 +886,10 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
         const formattedMarks = isNepali ? toNepaliDigits(marksNum) : marksNum;
         const marksText = hasValidMarks ? `  [${formattedMarks}]` : '';
 
+        drawingCounter++;
         sortedQuestionItems.push({
           sortNum: numVal,
-          questionXml: buildQuestionXml(qNumDisplay, text, marksText, matchingRelId, matchingImgFile),
+          questionXml: buildQuestionXml(qNumDisplay, text, marksText, matchingRelId, matchingImgFile, matchingDimensions, drawingCounter),
         });
       });
 
@@ -781,9 +911,10 @@ const generateQuestionDocx = async (data, outputPath, figures = []) => {
             const figQNumDisplay = isNepali ? toNepaliDigits(rawFigQNum) : rawFigQNum;
             const placeholderText = isNepali ? '[तलको चित्र हेर्नुहोस्]' : '[See Figure below]';
 
+            drawingCounter++;
             sortedQuestionItems.push({
               sortNum: figDigits,
-              questionXml: buildQuestionXml(figQNumDisplay, placeholderText, '', entry.relId, entry.imgFile),
+              questionXml: buildQuestionXml(figQNumDisplay, placeholderText, '', entry.relId, entry.imgFile, entry.dimensions, drawingCounter),
             });
           }
         });

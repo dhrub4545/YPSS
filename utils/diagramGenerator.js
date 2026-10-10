@@ -5,6 +5,89 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const { getGeminiApiKeys, markKeyExhausted } = require('./geminiParser');
+const cloudinary = require('cloudinary').v2;
+
+if (process.env.CLOUDINARY_CLOUD_NAME) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+}
+
+async function rasterizeSvgToPng(svgString, tempSvgPath, outputPath) {
+  fs.writeFileSync(tempSvgPath, svgString, 'utf-8');
+  let cloudUrl = null;
+
+  // 1. Attempt local Python fitz & PIL ImageChops (if Python & PyMuPDF fitz are installed)
+  try {
+    const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
+    const pyCmd = `${pythonBin} -c "import fitz, sys; from PIL import Image, ImageChops; doc = fitz.open('${tempSvgPath.replace(/\\/g, '/')}'); page = doc[0]; pix = page.get_pixmap(dpi=300); pix.save('${outputPath.replace(/\\/g, '/')}'); img = Image.open('${outputPath.replace(/\\/g, '/')}').convert('RGB'); bg = Image.new('RGB', img.size, (255, 255, 255)); diff = ImageChops.difference(img, bg); bbox = diff.getbbox(); (bbox and img.crop((max(0, bbox[0]-10), max(0, bbox[1]-10), min(img.width, bbox[2]+10), min(img.height, bbox[3]+10))).save('${outputPath.replace(/\\/g, '/')}'))"`;
+    execSync(pyCmd, { stdio: 'pipe' });
+
+    if (fs.existsSync(outputPath)) {
+      const checkBuf = fs.readFileSync(outputPath);
+      if (checkBuf.length > 8 && checkBuf[0] === 0x89 && checkBuf[1] === 0x50 && checkBuf[2] === 0x4E && checkBuf[3] === 0x47) {
+        console.log(`[DiagramGenerator] Successfully rendered high-res PNG via local Python fitz (${checkBuf.length} bytes) at: ${outputPath}`);
+        return { outputPath, imageUrl: null };
+      }
+    }
+  } catch (pyErr) {
+    console.log(`[DiagramGenerator] Python rendering unavailable in environment (${pyErr.message}). Using Cloudinary high-fidelity SVG rasterization...`);
+  }
+
+  // 2. Cloudinary High-Fidelity SVG Rasterization (Standard for Vercel Serverless & cloud runtimes)
+  if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY) {
+    try {
+      const base64Data = 'data:image/svg+xml;base64,' + Buffer.from(svgString, 'utf-8').toString('base64');
+      const uploadRes = await cloudinary.uploader.upload(base64Data, {
+        folder: 'ypss_question_papers/figures',
+        format: 'png',
+        resource_type: 'image',
+        transformation: [
+          { effect: 'trim' }
+        ]
+      });
+
+      if (uploadRes && uploadRes.secure_url) {
+        cloudUrl = uploadRes.secure_url;
+        console.log(`[DiagramGenerator] Cloudinary rasterized PNG URL: ${cloudUrl}`);
+        const pngRes = await fetch(uploadRes.secure_url);
+        if (pngRes.ok) {
+          const pngBuf = Buffer.from(await pngRes.arrayBuffer());
+          if (pngBuf[0] === 0x89 && pngBuf[1] === 0x50 && pngBuf[2] === 0x4E && pngBuf[3] === 0x47) {
+            fs.writeFileSync(outputPath, pngBuf);
+            console.log(`[DiagramGenerator] Successfully saved binary PNG from Cloudinary (${pngBuf.length} bytes) to: ${outputPath}`);
+            return { outputPath, imageUrl: cloudUrl };
+          }
+        }
+      }
+    } catch (cloudErr) {
+      console.warn(`[DiagramGenerator] Cloudinary SVG rasterization with trim failed (${cloudErr.message}). Retrying standard upload...`);
+      try {
+        const base64Data = 'data:image/svg+xml;base64,' + Buffer.from(svgString, 'utf-8').toString('base64');
+        const uploadRes = await cloudinary.uploader.upload(base64Data, {
+          folder: 'ypss_question_papers/figures',
+          format: 'png',
+          resource_type: 'image',
+        });
+        if (uploadRes && uploadRes.secure_url) {
+          cloudUrl = uploadRes.secure_url;
+          const pngRes = await fetch(uploadRes.secure_url);
+          if (pngRes.ok) {
+            const pngBuf = Buffer.from(await pngRes.arrayBuffer());
+            fs.writeFileSync(outputPath, pngBuf);
+            return { outputPath, imageUrl: cloudUrl };
+          }
+        }
+      } catch (retryErr) {
+        console.warn('[DiagramGenerator] Cloudinary fallback upload also failed:', retryErr.message);
+      }
+    }
+  }
+
+  return { outputPath, imageUrl: cloudUrl };
+}
 
 const fileToGenerativePart = async (filePathOrUrl, mimeType) => {
   if (typeof filePathOrUrl === 'string' && (filePathOrUrl.startsWith('http://') || filePathOrUrl.startsWith('https://'))) {
@@ -167,22 +250,14 @@ Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`
   }
 
   const tempSvgPath = outputPath.replace(/\.[^.]+$/, '.svg');
-  fs.writeFileSync(tempSvgPath, cleanSvg, 'utf-8');
+  const rasterResult = await rasterizeSvgToPng(cleanSvg, tempSvgPath, outputPath);
 
-  // Convert SVG to high-resolution PNG via Python fitz & Auto-crop top/bottom white margins via PIL ImageChops (if Python is present)
-  try {
-    const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
-    const pyCmd = `${pythonBin} -c "import fitz, sys; from PIL import Image, ImageChops; doc = fitz.open('${tempSvgPath.replace(/\\/g, '/')}'); page = doc[0]; pix = page.get_pixmap(dpi=300); pix.save('${outputPath.replace(/\\/g, '/')}'); img = Image.open('${outputPath.replace(/\\/g, '/')}').convert('RGB'); bg = Image.new('RGB', img.size, (255, 255, 255)); diff = ImageChops.difference(img, bg); bbox = diff.getbbox(); (bbox and img.crop((max(0, bbox[0]-10), max(0, bbox[1]-10), min(img.width, bbox[2]+10), min(img.height, bbox[3]+10))).save('${outputPath.replace(/\\/g, '/')}'))"`;
-    execSync(pyCmd, { stdio: 'pipe' });
-  } catch (pyErr) {
-    console.warn(`[DiagramGenerator] Python rendering unavailable in environment (${pyErr.message}). Retaining SVG output.`);
-    if (!fs.existsSync(outputPath) && fs.existsSync(tempSvgPath)) {
-      fs.copyFileSync(tempSvgPath, outputPath);
-    }
-  }
-
-  console.log(`Successfully generated cropped diagram PNG (${mode} mode) at: ${outputPath}`);
-  return outputPath;
+  console.log(`Successfully generated diagram PNG (${mode} mode) at: ${outputPath}`);
+  return {
+    outputPath: rasterResult.outputPath || outputPath,
+    imageUrl: rasterResult.imageUrl || null,
+    toString: () => rasterResult.outputPath || outputPath,
+  };
 }
 
 module.exports = { generateGeometricDiagramFromImage };
