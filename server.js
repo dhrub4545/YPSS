@@ -15,21 +15,43 @@ connectDB();
 const app = express();
 
 // Middleware
+const defaultAllowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:8080',
+  'http://localhost:8081',
+  'http://localhost:8082',
+  'http://127.0.0.1:8080',
+  'http://127.0.0.1:8081',
+  'http://127.0.0.1:8082',
+  'http://localhost:19006',
+];
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',') 
-  : ['http://localhost:3000', 'http://localhost:8082', 'http://127.0.0.1:8082'];
+  ? process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()) 
+  : defaultAllowedOrigins;
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || process.env.NODE_ENV !== 'production') {
+    // Allow requests with no origin (mobile apps, server-to-server, curl)
+    if (!origin) return callback(null, true);
+
+    // Allow all local development and LAN origins (localhost, 127.0.0.1, 192.168.x.x, 10.x.x.x) on any port
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)) {
       return callback(null, true);
     }
-    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    return callback(new Error('Blocked by CORS'));
-  }
+
+    // Return null, false for disallowed origins instead of throwing 500
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
 }));
+app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
