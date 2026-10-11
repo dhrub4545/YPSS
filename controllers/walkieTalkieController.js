@@ -101,7 +101,7 @@ exports.getContacts = async (req, res) => {
       _id: { $ne: req.user._id },
       role: { $in: ['principal', 'teacher'] },
     })
-      .select('name role username phone')
+      .select('name role username phone profilePicture photo avatar profilePhoto image')
       .sort({ role: 1, name: 1 })
       .lean();
 
@@ -111,6 +111,7 @@ exports.getContacts = async (req, res) => {
       username: u.username,
       role: u.role,
       phone: u.phone,
+      photo: u.profilePicture || u.photo || u.avatar || u.profilePhoto || u.image || null,
       canBroadcast: u.role === 'principal' || allowedBroadcastSet.has(u._id.toString()),
     }));
 
@@ -188,29 +189,46 @@ exports.sendMessage = async (req, res) => {
     if (!audioUrl && req.body.audioBase64) {
       try {
         let base64Payload = req.body.audioBase64;
-        if (!base64Payload.startsWith('data:')) {
+        let ext = '.m4a';
+        if (base64Payload.startsWith('data:')) {
+          const match = base64Payload.match(/^data:([a-zA-Z0-9/]+);base64,/);
+          if (match && match[1]) {
+            const mime = match[1].toLowerCase();
+            if (mime.includes('webm')) ext = '.webm';
+            else if (mime.includes('3gp')) ext = '.3gp';
+            else if (mime.includes('wav')) ext = '.wav';
+            else if (mime.includes('mp4') || mime.includes('m4a')) ext = '.m4a';
+          }
+        } else {
           base64Payload = `data:audio/m4a;base64,${base64Payload}`;
         }
+
         if (isCloudinaryConfigured()) {
-          const cloudRes = await cloudinary.uploader.upload(base64Payload, {
-            folder: 'ypss_walkie_talkie',
-            resource_type: 'video',
-          });
-          audioUrl = cloudRes.secure_url;
-        } else {
-          // Save locally if Cloudinary not available
+          try {
+            const cloudRes = await cloudinary.uploader.upload(base64Payload, {
+              folder: 'ypss_walkie_talkie',
+              resource_type: 'video',
+            });
+            audioUrl = cloudRes.secure_url;
+          } catch (cloudErr) {
+            console.warn('[WalkieTalkie] Cloudinary base64 upload failed, falling back to local storage:', cloudErr.message);
+          }
+        }
+
+        if (!audioUrl) {
+          // Save locally if Cloudinary not available or failed
           const uploadDir = process.env.VERCEL
             ? path.join(os.tmpdir(), 'ypss_uploads')
             : path.join(__dirname, '../uploads');
           fs.mkdirSync(uploadDir, { recursive: true });
-          const fname = `voice_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.m4a`;
+          const fname = `voice_${Date.now()}_${Math.random().toString(36).substring(2, 6)}${ext}`;
           const filePath = path.join(uploadDir, fname);
           const rawBase64 = base64Payload.replace(/^data:[^;]+;base64,/, '');
           fs.writeFileSync(filePath, Buffer.from(rawBase64, 'base64'));
           audioUrl = `/uploads/${fname}`;
         }
       } catch (b64Err) {
-        console.error('[WalkieTalkie] Base64 upload failed:', b64Err.message);
+        console.error('[WalkieTalkie] Base64 processing failed:', b64Err.message);
         return res.status(500).json({ success: false, message: 'Failed to process voice audio data' });
       }
     }
@@ -284,10 +302,19 @@ exports.getFeed = async (req, res) => {
       ];
     }
 
-    const messages = await WalkieTalkieMessage.find(query)
-      .sort({ createdAt: 1 })
-      .limit(Number(limit))
-      .lean();
+    let messages;
+    if (since) {
+      messages = await WalkieTalkieMessage.find(query)
+        .sort({ createdAt: 1 })
+        .limit(Number(limit))
+        .lean();
+    } else {
+      messages = await WalkieTalkieMessage.find(query)
+        .sort({ createdAt: -1 })
+        .limit(Number(limit))
+        .lean();
+      messages.reverse();
+    }
 
     res.json({
       success: true,

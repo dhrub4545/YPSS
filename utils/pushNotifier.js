@@ -50,8 +50,8 @@ const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration,
     }
 
     let fullAudioUrl = audioUrl;
-    if (fullAudioUrl && fullAudioUrl.startsWith('/uploads')) {
-      fullAudioUrl = `https://ypssbackend.vercel.app${fullAudioUrl}`;
+    if (fullAudioUrl && (fullAudioUrl.startsWith('/uploads') || fullAudioUrl.startsWith('uploads/'))) {
+      fullAudioUrl = `https://ypssbackend.vercel.app/${fullAudioUrl.replace(/^\/+/, '')}`;
     }
 
     const title = type === 'broadcast'
