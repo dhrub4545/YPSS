@@ -1,5 +1,7 @@
 const Notice = require('../models/Notice');
-const NepaliDate = require('nepali-date-converter');
+const nd = require('nepali-date-converter');
+const NepaliDate = nd.default || nd;
+const { notifyNoticePublished } = require('../utils/pushNotifier');
 
 const getNotices = async (req, res) => {
   try {
@@ -23,18 +25,27 @@ const createNotice = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Title and Content are required.' });
     }
 
-    let dateBS = '2083-01-15';
+    let dateBS = '';
     try {
-      dateBS = new NepaliDate().format('YYYY-MM-DD');
-    } catch (e) {}
+      const today = new NepaliDate();
+      dateBS = today.format('YYYY-MM-DD');
+    } catch (e) {
+      console.warn('[NoticeController] NepaliDate format error:', e.message);
+      dateBS = new Date().toISOString().slice(0, 10);
+    }
 
     const notice = await Notice.create({
-      title,
-      content,
+      title: title.trim(),
+      content: content.trim(),
       category: category || 'general',
       audience: audience || 'all',
       postedBy: req.user?._id,
       dateBS,
+    });
+
+    // Fire-and-forget push notification dispatch to target audience
+    notifyNoticePublished({ notice, sender: req.user }).catch((err) => {
+      console.warn('[NoticeController] Failed to dispatch notice push notification:', err.message);
     });
 
     return res.status(201).json({

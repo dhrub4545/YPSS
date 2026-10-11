@@ -97,7 +97,80 @@ const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration,
   }
 };
 
+const notifyNoticePublished = async ({ notice, sender }) => {
+  try {
+    let query = {
+      pushTokens: { $exists: true, $not: { $size: 0 } },
+    };
+
+    if (sender?._id) {
+      query._id = { $ne: sender._id };
+    }
+
+    if (notice.audience === 'teachers') {
+      query.role = 'teacher';
+    } else if (notice.audience === 'students') {
+      query.role = 'student';
+    } else if (notice.audience === 'parents') {
+      query.role = 'parent';
+    } else {
+      query.role = { $in: ['teacher', 'student', 'parent', 'principal'] };
+    }
+
+    const targetUsers = await User.find(query).select('pushTokens name role');
+    if (!targetUsers.length) {
+      console.log(`[PushNotifier] No registered push tokens for audience "${notice.audience}".`);
+      return;
+    }
+
+    const categoryIcons = {
+      urgent: '🚨',
+      exam: '📝',
+      holiday: '🎉',
+      fee: '💰',
+      general: '📢',
+    };
+    const icon = categoryIcons[notice.category] || '📢';
+    const title = `${icon} School Notice: ${notice.title}`;
+    const cleanContent = (notice.content || '').replace(/\s+/g, ' ').trim();
+    const body = cleanContent.length > 120 ? cleanContent.slice(0, 117) + '...' : cleanContent;
+
+    const pushMessages = [];
+    for (const u of targetUsers) {
+      if (Array.isArray(u.pushTokens)) {
+        for (const token of u.pushTokens) {
+          if (token && typeof token === 'string' && (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken'))) {
+            pushMessages.push({
+              to: token,
+              sound: 'default',
+              title,
+              body,
+              priority: 'high',
+              channelId: 'school-notices',
+              data: {
+                type: 'notice',
+                noticeId: notice._id ? notice._id.toString() : undefined,
+                title: notice.title,
+                category: notice.category,
+                dateBS: notice.dateBS,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    if (pushMessages.length > 0) {
+      await sendExpoPushNotifications(pushMessages);
+    }
+  } catch (err) {
+    console.warn('[PushNotifier] notifyNoticePublished error:', err.message);
+  }
+};
+
 module.exports = {
   sendExpoPushNotifications,
   notifyWalkieTalkieDispatch,
+  notifyNoticePublished,
 };
+
