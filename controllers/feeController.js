@@ -958,9 +958,10 @@ const downloadReceiptPdf = async (req, res) => {
 
 const pushFeeAlerts = async (req, res) => {
   try {
-    const students = await Student.find().populate('user class');
+    const students = await Student.find().populate('user class parent');
     const allFees = await Fee.find().lean();
     const Notice = require('../models/Notice');
+    const { notifyNoticePublished } = require('../utils/pushNotifier');
 
     let totalNotified = 0;
     let grandOutstanding = 0;
@@ -979,13 +980,25 @@ const pushFeeAlerts = async (req, res) => {
         const className = student.class?.name || 'Class';
         const nepaliDateStr = new NepaliDate(new Date()).format('YYYY-MM-DD');
 
-        await Notice.create({
+        const targetUserIds = [];
+        if (student.user?._id) targetUserIds.push(student.user._id);
+        if (student.parent?._id) targetUserIds.push(student.parent._id);
+        else if (student.parent) targetUserIds.push(student.parent);
+
+        const notice = await Notice.create({
           title: `📢 Fee Reminder: ${studentName}`,
           content: `Dear Parent & Student,\nThis is a fee reminder for ${studentName} (${className}, Roll #${student.rollNumber || '—'}).\nTotal Remaining Fee Balance: NPR ${remaining.toLocaleString()}.\nKindly make payment at the school accounts section or via direct bank transfer at your earliest convenience. Thank you!\n\n— Yashoda Prem Shishu Sadan Administration`,
           category: 'fee',
-          audience: 'all',
+          audience: 'individual',
+          targetUsers: targetUserIds,
+          targetStudent: student._id,
           postedBy: req.user?._id || null,
           dateBS: `${nepaliDateStr} B.S.`,
+        });
+
+        // Dispatch push notification directly to targeted student & parent devices only
+        notifyNoticePublished({ notice, sender: req.user }).catch((err) => {
+          console.warn('[FeeController] Failed to dispatch fee notice push notification:', err.message);
         });
       }
     }

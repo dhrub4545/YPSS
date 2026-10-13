@@ -17,8 +17,16 @@ const NoticeSchema = new mongoose.Schema({
   },
   audience: {
     type: String,
-    enum: ['all', 'students', 'teachers', 'parents'],
+    enum: ['all', 'students', 'teachers', 'parents', 'individual'],
     default: 'all',
+  },
+  targetUsers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  }],
+  targetStudent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student',
   },
   postedBy: {
     type: mongoose.Schema.Types.ObjectId,

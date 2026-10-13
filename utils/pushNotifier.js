@@ -103,18 +103,31 @@ const notifyNoticePublished = async ({ notice, sender }) => {
       pushTokens: { $exists: true, $not: { $size: 0 } },
     };
 
-    if (sender?._id) {
-      query._id = { $ne: sender._id };
-    }
-
-    if (notice.audience === 'teachers') {
-      query.role = 'teacher';
-    } else if (notice.audience === 'students') {
-      query.role = 'student';
-    } else if (notice.audience === 'parents') {
-      query.role = 'parent';
+    if (notice.audience === 'individual' || (Array.isArray(notice.targetUsers) && notice.targetUsers.length > 0)) {
+      const allowedIds = (notice.targetUsers || []).map((id) => (id?._id || id).toString());
+      if (!allowedIds.length) {
+        console.log('[PushNotifier] Individual notice has no target users specified.');
+        return;
+      }
+      if (sender?._id) {
+        query._id = { $in: allowedIds, $ne: sender._id };
+      } else {
+        query._id = { $in: allowedIds };
+      }
     } else {
-      query.role = { $in: ['teacher', 'student', 'parent', 'principal'] };
+      if (sender?._id) {
+        query._id = { $ne: sender._id };
+      }
+
+      if (notice.audience === 'teachers') {
+        query.role = 'teacher';
+      } else if (notice.audience === 'students') {
+        query.role = 'student';
+      } else if (notice.audience === 'parents') {
+        query.role = 'parent';
+      } else {
+        query.role = { $in: ['teacher', 'student', 'parent', 'principal'] };
+      }
     }
 
     const targetUsers = await User.find(query).select('pushTokens name role');

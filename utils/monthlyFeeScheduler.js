@@ -22,8 +22,9 @@ const checkAndTriggerMonthlyFeeNotifications = async (force = false) => {
     const nepaliDateStr = new NepaliDate(today).format('YYYY-MM-DD');
     const targetDateBS = `${nepaliDateStr} B.S.`;
 
-    const students = await Student.find().populate('user class');
+    const students = await Student.find().populate('user class parent');
     const allFees = await Fee.find().lean();
+    const { notifyNoticePublished } = require('./pushNotifier');
 
     let count = 0;
     for (const student of students) {
@@ -50,12 +51,24 @@ const checkAndTriggerMonthlyFeeNotifications = async (force = false) => {
         count++;
         const className = student.class?.name || 'Class';
 
-        await Notice.create({
+        const targetUserIds = [];
+        if (student.user?._id) targetUserIds.push(student.user._id);
+        if (student.parent?._id) targetUserIds.push(student.parent._id);
+        else if (student.parent) targetUserIds.push(student.parent);
+
+        const notice = await Notice.create({
           title: expectedTitle,
           content: `Default Monthly Fee Notice (${targetDateBS}):\nDear Parent & Student, this is an automated fee reminder for ${studentName} (${className}, Roll #${student.rollNumber || '—'}). Remaining fee balance: NPR ${remaining.toLocaleString()}.\nKindly make payment at the school accounts section or via digital transfer at your earliest convenience. Thank you!`,
           category: 'fee',
-          audience: 'all',
+          audience: 'individual',
+          targetUsers: targetUserIds,
+          targetStudent: student._id,
           dateBS: targetDateBS,
+        });
+
+        // Dispatch push notification directly to targeted student & parent devices only
+        notifyNoticePublished({ notice }).catch((err) => {
+          console.warn('[Monthly Fee Scheduler] Failed to dispatch push notification:', err.message);
         });
       }
     }
