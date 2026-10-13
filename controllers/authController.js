@@ -2,6 +2,10 @@ const User = require('../models/User');
 const Student = require('../models/Student');
 const Class = require('../models/Class');
 const jwt = require('jsonwebtoken');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { uploadToCloud, deleteFromCloud, isCloudinaryConfigured } = require('../utils/cloudStorage');
 
 const generateToken = (id) => jwt.sign(
   { id },
@@ -16,6 +20,8 @@ const buildSessionData = async (user) => {
     username: user.username,
     role: user.role,
     phone: user.phone,
+    profilePicture: user.profilePicture || user.photo || '',
+    photo: user.photo || user.profilePicture || '',
     languagePreference: user.languagePreference,
   };
 
@@ -210,10 +216,123 @@ const updatePassword = async (req, res) => {
   }
 };
 
+const getProfileCloudinarySignature = async (req, res) => {
+  try {
+    if (!process.env.CLOUDINARY_API_SECRET || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_CLOUD_NAME) {
+      return res.status(400).json({ success: false, message: 'Cloudinary storage is not configured' });
+    }
+    const timestamp = Math.floor(Date.now() / 1000);
+    const folder = 'ypss_profiles';
+    const cloudinary = require('cloudinary').v2;
+    const signature = cloudinary.utils.api_sign_request(
+      { timestamp, folder },
+      process.env.CLOUDINARY_API_SECRET
+    );
+    return res.json({
+      success: true,
+      data: {
+        timestamp,
+        folder,
+        signature,
+        apiKey: process.env.CLOUDINARY_API_KEY,
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const updateProfilePicture = async (req, res) => {
+  try {
+    let photoUrl = req.body?.photoUrl;
+
+    // 1. If file uploaded via multer
+    if (req.file && req.file.path) {
+      try {
+        const cloudUrl = await uploadToCloud(req.file.path, 'ypss_profiles', { resource_type: 'image' });
+        photoUrl = cloudUrl || `/uploads/${path.basename(req.file.path)}`;
+      } catch (uploadErr) {
+        console.warn('[ProfilePic] Multer upload to cloud error:', uploadErr.message);
+        photoUrl = `/uploads/${path.basename(req.file.path)}`;
+      }
+      try {
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      } catch (_) {}
+    }
+
+    // 2. If sent as base64 string
+    if (!photoUrl && (req.body?.image || req.body?.photoBase64)) {
+      const base64Data = req.body.image || req.body.photoBase64;
+      const formattedBase64 = base64Data.startsWith('data:')
+        ? base64Data
+        : `data:image/jpeg;base64,${base64Data}`;
+
+      if (isCloudinaryConfigured()) {
+        try {
+          const cloudinary = require('cloudinary').v2;
+          const cloudRes = await cloudinary.uploader.upload(formattedBase64, {
+            folder: 'ypss_profiles',
+            resource_type: 'image',
+          });
+          photoUrl = cloudRes.secure_url;
+        } catch (cloudErr) {
+          console.warn('[ProfilePic] Cloudinary base64 upload error:', cloudErr.message);
+        }
+      }
+
+      if (!photoUrl) {
+        // Fallback: save to uploads folder locally / os.tmpdir
+        const uploadDir = process.env.VERCEL
+          ? path.join(os.tmpdir(), 'ypss_uploads')
+          : path.join(__dirname, '../uploads');
+        fs.mkdirSync(uploadDir, { recursive: true });
+        const fname = `profile_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.jpg`;
+        const fpath = path.join(uploadDir, fname);
+        const dataOnly = formattedBase64.replace(/^data:image\/\w+;base64,/, '');
+        fs.writeFileSync(fpath, Buffer.from(dataOnly, 'base64'));
+        photoUrl = `/uploads/${fname}`;
+      }
+    }
+
+    if (!photoUrl) {
+      return res.status(400).json({ success: false, message: 'No photo provided or upload failed' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Clean up previous Cloudinary photo if it belongs to our cloud
+    if (user.profilePicture && user.profilePicture.includes('cloudinary.com') && user.profilePicture !== photoUrl) {
+      deleteFromCloud(user.profilePicture).catch(() => {});
+    }
+
+    user.profilePicture = photoUrl;
+    user.photo = photoUrl;
+    await user.save();
+
+    const session = await buildSessionData(user);
+    return res.json({
+      success: true,
+      message: 'Profile picture updated successfully',
+      data: session,
+      profilePicture: photoUrl,
+      photo: photoUrl,
+    });
+  } catch (error) {
+    console.error('Update Profile Picture Error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getUserProfile,
   updateLanguagePreference,
   updatePassword,
+  getProfileCloudinarySignature,
+  updateProfilePicture,
 };
