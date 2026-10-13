@@ -125,7 +125,7 @@ const getClassDetails = async (req, res) => {
     }
 
     const students = await Student.find(studentQuery)
-      .populate({ path: 'user', select: 'name username phone' })
+      .populate({ path: 'user', select: 'name username phone profilePicture photo' })
       .populate({ path: 'parent', select: 'name phone' })
       .sort({ rollNumber: 1 });
 
@@ -139,6 +139,8 @@ const getClassDetails = async (req, res) => {
           name: student.user?.name || 'Student',
           username: student.user?.username || '',
           phone: student.user?.phone || '',
+          profilePicture: student.user?.profilePicture || student.user?.photo || null,
+          photo: student.user?.photo || student.user?.profilePicture || null,
           rollNumber: student.rollNumber,
           fatherName: student.fatherName || '',
           parentName: student.parent?.name || '',

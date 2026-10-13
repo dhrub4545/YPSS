@@ -15,7 +15,7 @@ const getParents = async (req, res) => {
   try {
     const parents = await User.find({ role: 'parent' }).select('-password').sort({ name: 1 }).lean();
     const populatedParents = await Promise.all(parents.map(async (parent) => {
-      const children = await Student.find({ parent: parent._id }).populate({ path: 'user', select: 'username' });
+      const children = await Student.find({ parent: parent._id }).populate({ path: 'user', select: 'username name profilePicture photo' });
       return {
         ...parent,
         studentUsernames: children.map(child => child.user?.username).filter(Boolean)
@@ -32,7 +32,7 @@ const getStudents = async (req, res) => {
     const students = await Student.find()
       .populate({ path: 'user', select: '-password' })
       .populate('class')
-      .populate({ path: 'parent', select: 'name username' })
+      .populate({ path: 'parent', select: 'name username profilePicture photo' })
       .sort({ createdAt: -1 });
     return res.json({ success: true, data: students });
   } catch (error) {
