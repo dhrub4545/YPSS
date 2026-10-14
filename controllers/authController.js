@@ -127,7 +127,13 @@ const registerUser = async (req, res) => {
     }
 
     if (role === 'parent' && studentUsers.length) {
-      await Student.updateMany({ user: { $in: studentUsers.map((student) => student._id) } }, { parent: user._id });
+      await Student.updateMany(
+        {
+          user: { $in: studentUsers.map((student) => student._id) },
+          $or: [{ parent: null }, { parent: { $exists: false } }],
+        },
+        { parent: user._id }
+      );
     }
 
     const session = await buildSessionData(user);

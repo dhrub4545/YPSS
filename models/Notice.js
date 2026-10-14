@@ -41,4 +41,8 @@ const NoticeSchema = new mongoose.Schema({
   },
 });
 
+NoticeSchema.index({ audience: 1, createdAt: -1 });
+NoticeSchema.index({ targetUsers: 1, createdAt: -1 });
+NoticeSchema.index({ targetStudent: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Notice', NoticeSchema);

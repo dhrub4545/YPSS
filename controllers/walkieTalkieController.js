@@ -9,7 +9,7 @@ const { uploadToCloud, isCloudinaryConfigured } = require('../utils/cloudStorage
 const { notifyWalkieTalkieDispatch } = require('../utils/pushNotifier');
 
 const getOrCreateConfig = async () => {
-  let config = await WalkieTalkieConfig.findOne();
+  let config = await WalkieTalkieConfig.findOne().sort({ updatedAt: -1 });
   if (!config) {
     config = await WalkieTalkieConfig.create({
       isEnabled: true,
@@ -19,11 +19,67 @@ const getOrCreateConfig = async () => {
   return config;
 };
 
+// Clean up local or remote audio resources for deleted voice messages
+const deleteAudioResource = (audioUrl) => {
+  if (!audioUrl || typeof audioUrl !== 'string') return;
+  if (audioUrl.startsWith('/uploads/')) {
+    const filename = path.basename(audioUrl);
+    const possiblePaths = [
+      path.join(__dirname, '../uploads', filename),
+      path.join(os.tmpdir(), 'ypss_uploads', filename),
+    ];
+    for (const p of possiblePaths) {
+      try {
+        if (fs.existsSync(p)) {
+          fs.unlinkSync(p);
+        }
+      } catch (_) {}
+    }
+  } else if (audioUrl.includes('cloudinary.com') && isCloudinaryConfigured()) {
+    try {
+      const parts = audioUrl.split('/');
+      const filenameWithExt = parts.pop();
+      const folder = parts.pop();
+      const name = filenameWithExt.substring(0, filenameWithExt.lastIndexOf('.')) || filenameWithExt;
+      const publicId = folder && folder !== 'upload' ? `${folder}/${name}` : name;
+      cloudinary.uploader.destroy(publicId, { resource_type: 'video' }).catch(() => {});
+    } catch (_) {}
+  }
+};
+
+/**
+ * Automatically prunes older voice messages so that only the latest `maxRetained` (15) are kept.
+ * Deletes older records from the database and cleans up their audio files.
+ */
+const pruneOldVoiceMessages = async (maxRetained = 15) => {
+  try {
+    const excessMessages = await WalkieTalkieMessage.find()
+      .sort({ createdAt: -1 })
+      .skip(maxRetained)
+      .select('_id audioUrl')
+      .lean();
+
+    if (excessMessages && excessMessages.length > 0) {
+      const idsToDelete = excessMessages.map((m) => m._id);
+      await WalkieTalkieMessage.deleteMany({ _id: { $in: idsToDelete } });
+
+      for (const msg of excessMessages) {
+        deleteAudioResource(msg.audioUrl);
+      }
+      console.log(`[WalkieTalkie] Pruned ${excessMessages.length} voice messages beyond the latest ${maxRetained}`);
+    }
+  } catch (err) {
+    console.warn('[WalkieTalkie] pruneOldVoiceMessages error:', err.message);
+  }
+};
+
+
 // @desc    Get walkie-talkie status and current user permissions
 // @route   GET /api/walkie-talkie/config
 // @access  Private (Principal, Teacher)
 exports.getConfig = async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const config = await getOrCreateConfig();
     const isPrincipal = req.user.role === 'principal';
     const isAllowedTeacher = (config.allowedBroadcastTeacherIds || []).some(
@@ -33,7 +89,7 @@ exports.getConfig = async (req, res) => {
     res.json({
       success: true,
       data: {
-        isEnabled: config.isEnabled,
+        isEnabled: Boolean(config.isEnabled),
         canBroadcast: isPrincipal || isAllowedTeacher,
         isPrincipal,
         allowedBroadcastTeacherIds: config.allowedBroadcastTeacherIds || [],
@@ -62,21 +118,37 @@ exports.updateConfig = async (req, res) => {
 
     if (typeof isEnabled === 'boolean') {
       config.isEnabled = isEnabled;
+    } else if (isEnabled === 'true' || isEnabled === '1') {
+      config.isEnabled = true;
+    } else if (isEnabled === 'false' || isEnabled === '0') {
+      config.isEnabled = false;
     }
+
     if (Array.isArray(allowedBroadcastTeacherIds)) {
       config.allowedBroadcastTeacherIds = allowedBroadcastTeacherIds;
     }
 
     config.updatedBy = req.user._id;
     config.updatedAt = new Date();
+    config.markModified('isEnabled');
     await config.save();
+
+    // Synchronize all config documents in case duplicates exist in MongoDB
+    await WalkieTalkieConfig.updateMany({}, {
+      $set: {
+        isEnabled: config.isEnabled,
+        allowedBroadcastTeacherIds: config.allowedBroadcastTeacherIds,
+        updatedAt: config.updatedAt,
+      },
+    });
 
     console.log(`[WalkieTalkie] Config updated by Principal: isEnabled=${config.isEnabled}, broadcastTeachers=${config.allowedBroadcastTeacherIds.length}`);
 
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.json({
       success: true,
       data: {
-        isEnabled: config.isEnabled,
+        isEnabled: Boolean(config.isEnabled),
         canBroadcast: true,
         allowedBroadcastTeacherIds: config.allowedBroadcastTeacherIds,
       },
@@ -252,6 +324,9 @@ exports.sendMessage = async (req, res) => {
 
     console.log(`[WalkieTalkie] Voice dispatch created: type=${type}, sender=${req.user.name} (${req.user.role}), duration=${duration}s`);
 
+    // Ensure only the latest 15 voice messages are retained in the database
+    await pruneOldVoiceMessages(15);
+
     // Wake up locked or backgrounded phones via High-Priority Expo Push Notification
     notifyWalkieTalkieDispatch({
       sender: req.user,
@@ -277,6 +352,16 @@ exports.sendMessage = async (req, res) => {
 // @access  Private (Principal, Teacher)
 exports.getFeed = async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    const config = await getOrCreateConfig();
+    const isPrincipal = req.user.role === 'principal';
+    const isAllowedTeacher = (config.allowedBroadcastTeacherIds || []).some(
+      (id) => id.toString() === req.user._id.toString()
+    );
+
+    // Enforce retention limit: ensure voice messages before the last 15 are pruned
+    await pruneOldVoiceMessages(15);
+
     const { since, contactId, limit = 50 } = req.query;
     const query = {};
 
@@ -319,9 +404,14 @@ exports.getFeed = async (req, res) => {
     res.json({
       success: true,
       data: messages,
+      isEnabled: Boolean(config.isEnabled),
+      canBroadcast: isPrincipal || isAllowedTeacher,
     });
   } catch (err) {
     console.error('[WalkieTalkie] getFeed error:', err.message);
     res.status(500).json({ success: false, message: 'Server error fetching voice messages' });
   }
 };
+
+exports.pruneOldVoiceMessages = pruneOldVoiceMessages;
+

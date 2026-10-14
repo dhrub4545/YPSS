@@ -2,6 +2,7 @@ const Fee = require('../models/Fee');
 const Student = require('../models/Student');
 const Class = require('../models/Class');
 const User = require('../models/User');
+const Counter = require('../models/Counter');
 const PDFDocument = require('pdfkit');
 const nd = require('nepali-date-converter');
 const NepaliDate = nd.default || nd;
@@ -53,21 +54,52 @@ const generateFeeBill = async (req, res) => {
 };
 
 const getNextSequentialReceiptNo = async () => {
-  const fees = await Fee.find({}, { 'transactions.receiptNo': 1 });
-  let maxSeq = 0;
-  fees.forEach((fee) => {
-    (fee.transactions || []).forEach((t) => {
-      if (t.receiptNo) {
-        const match = String(t.receiptNo).match(/REC-(\d+)/i);
-        if (match && match[1]) {
-          const num = parseInt(match[1], 10);
-          if (num > maxSeq) maxSeq = num;
+  try {
+    let counter = await Counter.findOne({ id: 'receiptNo' });
+    if (!counter) {
+      // Find highest existing receipt number to seed the counter
+      const fees = await Fee.find({}, { 'transactions.receiptNo': 1 });
+      let maxSeq = 0;
+      fees.forEach((fee) => {
+        (fee.transactions || []).forEach((t) => {
+          if (t.receiptNo) {
+            const match = String(t.receiptNo).match(/REC-(\d+)/i);
+            if (match && match[1]) {
+              const num = parseInt(match[1], 10);
+              if (num > maxSeq) maxSeq = num;
+            }
+          }
+        });
+      });
+      counter = await Counter.findOneAndUpdate(
+        { id: 'receiptNo' },
+        { $setOnInsert: { seq: maxSeq } },
+        { upsert: true, new: true }
+      );
+    }
+    const updated = await Counter.findOneAndUpdate(
+      { id: 'receiptNo' },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true }
+    );
+    return `REC-${String(updated.seq).padStart(4, '0')}`;
+  } catch (err) {
+    console.error('Counter error, fallback to sequential calculation:', err.message);
+    const fees = await Fee.find({}, { 'transactions.receiptNo': 1 });
+    let maxSeq = 0;
+    fees.forEach((fee) => {
+      (fee.transactions || []).forEach((t) => {
+        if (t.receiptNo) {
+          const match = String(t.receiptNo).match(/REC-(\d+)/i);
+          if (match && match[1]) {
+            const num = parseInt(match[1], 10);
+            if (num > maxSeq) maxSeq = num;
+          }
         }
-      }
+      });
     });
-  });
-  const nextSeq = maxSeq + 1;
-  return `REC-${String(nextSeq).padStart(4, '0')}`;
+    return `REC-${String(maxSeq + 1).padStart(4, '0')}`;
+  }
 };
 
 const recordPayment = async (req, res) => {
@@ -466,6 +498,7 @@ const NEPALI_MONTH_NAMES = [
 // GET /api/fees/current-month-status
 const getCurrentMonthStudentFeeStatus = async (req, res) => {
   try {
+    const reqYear = req.query.year || req.query.academicYear || '';
     const today = new NepaliDate();
     const currentMonthIndex = today.getMonth() + 1; // 1-indexed (1: Baishakh ... 12: Chaitra)
     const currentMonthName = NEPALI_MONTH_NAMES[currentMonthIndex - 1] || 'Baishakh';
@@ -733,14 +766,25 @@ const downloadReceiptPdf = async (req, res) => {
     const filename = `${cleanReceiptNo}.pdf`;
 
     let txData = null;
-    const fees = await Fee.find().populate({
+    const fee = await Fee.findOne({ 'transactions.receiptNo': rawReceiptNo }).populate({
       path: 'student',
       populate: [
-        { path: 'user', select: 'name' },
+        { path: 'user', select: 'name username' },
         { path: 'class', select: 'name monthlyFee additionalFees academicYear' },
         { path: 'parent', select: 'name phone' },
       ],
     });
+
+    if (fee && fee.student && req.user) {
+      const isPrincipal = req.user.role === 'principal';
+      const isStaff = req.user.role === 'teacher';
+      const isStudentOwner = req.user.role === 'student' && String(fee.student.user?._id || fee.student.user) === String(req.user._id);
+      const isParentOwner = req.user.role === 'parent' && String(fee.student.parent?._id || fee.student.parent) === String(req.user._id);
+
+      if (!isPrincipal && !isStaff && !isStudentOwner && !isParentOwner) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to view this receipt' });
+      }
+    }
 
     const today = new NepaliDate();
     const currentMonthIndex = today.getMonth() + 1;
@@ -748,10 +792,8 @@ const downloadReceiptPdf = async (req, res) => {
     const elapsedMonths = currentMonthIndex;
     const periodCovered = currentMonthIndex === 1 ? 'Baishakh' : `Baishakh to ${currentMonthName}`;
 
-    fees.forEach((fee) => {
+    if (fee && fee.student) {
       const student = fee.student;
-      if (!student) return;
-
       const baseMonthly = Number(student.class?.monthlyFee || 0);
       const cumulativeBaseFee = baseMonthly * elapsedMonths;
       const addFees = Array.isArray(student.class?.additionalFees) ? student.class.additionalFees : [];
@@ -816,7 +858,7 @@ const downloadReceiptPdf = async (req, res) => {
           };
         }
       });
-    });
+    }
 
     if (!txData) {
       txData = {
@@ -1018,11 +1060,14 @@ const { checkAndTriggerMonthlyFeeNotifications } = require('../utils/monthlyFeeS
 
 const triggerMonthlyFeeCron = async (req, res) => {
   try {
-    if (process.env.CRON_SECRET) {
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret) {
       const authHeader = req.headers.authorization;
-      if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      if (authHeader !== `Bearer ${cronSecret}`) {
         return res.status(401).json({ success: false, message: 'Unauthorized cron request' });
       }
+    } else if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ success: false, message: 'CRON_SECRET is required to execute cron tasks in production.' });
     }
     const force = req.query.force === 'true' || req.body?.force === true;
     const result = await checkAndTriggerMonthlyFeeNotifications(force);

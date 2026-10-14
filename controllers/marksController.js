@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 
 const hasSameId = (left, right) => String(left?._id || left || '') === String(right?._id || right || '');
+const escapeRegex = (str) => String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const canViewStudent = async (user, student) => {
   if (user.role === 'principal') return true;
@@ -271,7 +272,7 @@ const getExamConfig = async (req, res) => {
     if (!config) {
       const paper = await QuestionPaper.findOne({
         class: classId,
-        subject: new RegExp(`^${subject.trim()}$`, 'i'),
+        subject: new RegExp(`^${escapeRegex(subject.trim())}$`, 'i'),
         examTerm: Number(terminal),
       }).sort({ createdAt: -1 });
 
@@ -345,7 +346,7 @@ const generateClassMarksCards = async (req, res) => {
     }
 
     const yrStr = String(academicYear || '2083').replace(/\s*B\.S\./i, '').trim();
-    const yrPattern = new RegExp(`^${yrStr}`, 'i');
+    const yrPattern = new RegExp(`^${escapeRegex(yrStr)}`, 'i');
     const termNum = Number(terminal);
 
     const [allClassMarks, attendanceRecords] = await Promise.all([
@@ -355,24 +356,38 @@ const generateClassMarksCards = async (req, res) => {
 
     const results = [];
     const errors = [];
+    const BATCH_SIZE = 3;
 
-    for (const student of students) {
-      try {
-        const cardResult = await generateStudentMarksCard({
-          studentId: student._id,
-          classId: classItem._id,
-          terminal: termNum,
-          academicYear: academicYear || '2083 B.S.',
-          preloadedStudent: student,
-          preloadedClass: classItem,
-          preloadedAllClassMarks: allClassMarks,
-          preloadedAttendanceRecords: attendanceRecords,
-        });
-        results.push(cardResult);
-      } catch (err) {
-        console.error(`[Bulk Generate] Failed for student ${student.user?.name || student._id}:`, err.message);
-        errors.push({ studentId: student._id, studentName: student.user?.name || 'Student', error: err.message });
-      }
+    for (let i = 0; i < students.length; i += BATCH_SIZE) {
+      const batch = students.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map((student) =>
+          generateStudentMarksCard({
+            studentId: student._id,
+            classId: classItem._id,
+            terminal: termNum,
+            academicYear: academicYear || '2083 B.S.',
+            preloadedStudent: student,
+            preloadedClass: classItem,
+            preloadedAllClassMarks: allClassMarks,
+            preloadedAttendanceRecords: attendanceRecords,
+          })
+        )
+      );
+
+      batchResults.forEach((resItem, idx) => {
+        const student = batch[idx];
+        if (resItem.status === 'fulfilled') {
+          results.push(resItem.value);
+        } else {
+          console.error(`[Bulk Generate] Failed for student ${student.user?.name || student._id}:`, resItem.reason?.message);
+          errors.push({
+            studentId: student._id,
+            studentName: student.user?.name || 'Student',
+            error: resItem.reason?.message || 'Compilation failed',
+          });
+        }
+      });
     }
 
     if (results.length === 0 && errors.length > 0) {
@@ -579,6 +594,70 @@ const http = require('http');
 const cloudinary = require('cloudinary').v2;
 const { isCloudinaryConfigured } = require('../utils/cloudStorage');
 
+function resolveCloudinaryDownloadUrl(fileUrl) {
+  if (!fileUrl || !fileUrl.startsWith('http')) return fileUrl;
+  if (!isCloudinaryConfigured()) return fileUrl;
+
+  try {
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+    });
+
+    const match = fileUrl.match(/\/(?:raw|image|video)\/(?:upload|authenticated|private)\/(?:s--[^/]+--\/)?(?:v\d+\/)?(.+?)(?:\?.*)?$/);
+    if (match && match[1]) {
+      const publicId = match[1];
+      const signedUrl = cloudinary.utils.private_download_url(publicId, '', {
+        resource_type: 'raw',
+        type: 'upload',
+      });
+      if (signedUrl) return signedUrl;
+    }
+  } catch (err) {
+    console.error('[Cloudinary Sign Error]:', err.message);
+  }
+  return fileUrl;
+}
+
+function streamRemoteFile(targetUrl, res, contentType, filename, disposition = 'inline') {
+  const follow = (currentUrl, redirectsLeft = 5) => {
+    if (redirectsLeft <= 0) {
+      return res.status(500).json({ success: false, message: 'Too many redirects when streaming file' });
+    }
+    const client = currentUrl.startsWith('https') ? https : http;
+    const req = client.get(currentUrl, (streamRes) => {
+      if (streamRes.statusCode >= 300 && streamRes.statusCode < 400 && streamRes.headers.location) {
+        let redirectUrl = streamRes.headers.location;
+        if (!redirectUrl.startsWith('http')) {
+          const parsed = new URL(currentUrl);
+          redirectUrl = new URL(redirectUrl, parsed.origin).href;
+        }
+        return follow(redirectUrl, redirectsLeft - 1);
+      }
+
+      if (streamRes.statusCode >= 400) {
+        console.error(`[Stream Error]: HTTP ${streamRes.statusCode} for ${currentUrl}`);
+        return res.status(streamRes.statusCode).json({ success: false, message: 'Document could not be retrieved from storage' });
+      }
+
+      res.setHeader('Content-Type', contentType);
+      const safeName = (filename || 'document').replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+      streamRes.pipe(res);
+    });
+
+    req.on('error', (err) => {
+      console.error('[Stream Error]:', err.message);
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: 'Could not stream document' });
+      }
+    });
+  };
+
+  follow(targetUrl);
+}
+
 const viewMarksCardPdf = async (req, res) => {
   const { cardId } = req.params;
   try {
@@ -587,50 +666,33 @@ const viewMarksCardPdf = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Marks card PDF not found' });
     }
 
+    if (req.user && req.user.role !== 'principal' && req.user.role !== 'teacher') {
+      const student = await Student.findById(card.student);
+      const isOwnerStudent = req.user.role === 'student' && student && hasSameId(student.user, req.user._id);
+      const isOwnerParent = req.user.role === 'parent' && student && hasSameId(student.parent, req.user._id);
+      if (!isOwnerStudent && !isOwnerParent) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to access this marks card' });
+      }
+      if (!card.isPublished) {
+        return res.status(403).json({ success: false, message: 'This marks card has not been published yet' });
+      }
+    }
+
     if (!/^https?:\/\//i.test(card.pdfUrl)) {
       const localPath = path.join(__dirname, '..', card.pdfUrl);
       if (fs.existsSync(localPath)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${(card.studentName || 'Student').replace(/[^a-zA-Z0-9_\-]/g, '_')}_Term_${card.terminal}.pdf"`);
         return res.sendFile(localPath);
       }
       return res.status(404).json({ success: false, message: 'Local PDF file not found' });
     }
 
-    if (isCloudinaryConfigured()) {
-      cloudinary.config({
-        cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-        api_key: process.env.CLOUDINARY_API_KEY,
-        api_secret: process.env.CLOUDINARY_API_SECRET,
-      });
-    }
-
-    let targetStreamUrl = card.pdfUrl;
-    const match = card.pdfUrl.match(/\/(?:raw|image)\/(?:upload|authenticated|private)\/(?:s--[^/]+--\/)?(?:v\d+\/)?(.+?)$/);
-    if (match && match[1]) {
-      const publicId = match[1];
-      targetStreamUrl =
-        cloudinary.utils.private_download_url(publicId, '', {
-          resource_type: 'raw',
-          type: 'authenticated',
-        }) || card.pdfUrl;
-    }
-
-    const client = targetStreamUrl.startsWith('https') ? https : http;
-    client.get(targetStreamUrl, (cloudRes) => {
-      if (cloudRes.statusCode >= 400) {
-        console.error(`[ViewPdf Cloudinary Error]: HTTP ${cloudRes.statusCode} for ${targetStreamUrl}`);
-        return res.status(cloudRes.statusCode).json({ success: false, message: 'Cloudinary document not available' });
-      }
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `inline; filename="${(card.studentName || 'Student').replace(/\s+/g, '_')}_Term_${card.terminal}.pdf"`
-      );
-      cloudRes.pipe(res);
-    }).on('error', (err) => {
-      console.error('[ViewPdf Stream Error]:', err.message);
-      res.status(500).json({ success: false, message: 'Could not stream PDF file' });
-    });
+    const targetUrl = resolveCloudinaryDownloadUrl(card.pdfUrl);
+    const filename = `${(card.studentName || 'Student').replace(/[^a-zA-Z0-9_\-]/g, '_')}_Term_${card.terminal}.pdf`;
+    return streamRemoteFile(targetUrl, res, 'application/pdf', filename, 'inline');
   } catch (error) {
+    console.error('[ViewMarksCardPdf Error]:', error.message);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -643,28 +705,39 @@ const downloadMarksCardDocxFile = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Marks card DOCX not found' });
     }
 
+    if (req.user && req.user.role !== 'principal' && req.user.role !== 'teacher') {
+      const student = await Student.findById(card.student);
+      const isOwnerStudent = req.user.role === 'student' && student && hasSameId(student.user, req.user._id);
+      const isOwnerParent = req.user.role === 'parent' && student && hasSameId(student.parent, req.user._id);
+      if (!isOwnerStudent && !isOwnerParent) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to access this marks card' });
+      }
+      if (!card.isPublished) {
+        return res.status(403).json({ success: false, message: 'This marks card has not been published yet' });
+      }
+    }
+
     if (!/^https?:\/\//i.test(card.docxUrl)) {
       const localPath = path.join(__dirname, '..', card.docxUrl);
       if (fs.existsSync(localPath)) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `attachment; filename="${(card.studentName || 'Student').replace(/[^a-zA-Z0-9_\-]/g, '_')}_Term_${card.terminal}.docx"`);
         return res.sendFile(localPath);
       }
       return res.status(404).json({ success: false, message: 'Local DOCX file not found' });
     }
 
-    const client = card.docxUrl.startsWith('https') ? https : http;
-    client.get(card.docxUrl, (cloudRes) => {
-      if (cloudRes.statusCode >= 400) {
-        console.error(`[DownloadDocx Cloudinary Error]: HTTP ${cloudRes.statusCode}`);
-        return res.status(cloudRes.statusCode).json({ success: false, message: 'Cloudinary document not available' });
-      }
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('Content-Disposition', `attachment; filename="${(card.studentName || 'Student').replace(/\s+/g, '_')}_Term_${card.terminal}.docx"`);
-      cloudRes.pipe(res);
-    }).on('error', (err) => {
-      console.error('[DownloadDocx Stream Error]:', err.message);
-      res.status(500).json({ success: false, message: 'Could not stream DOCX file' });
-    });
+    const targetUrl = resolveCloudinaryDownloadUrl(card.docxUrl);
+    const filename = `${(card.studentName || 'Student').replace(/[^a-zA-Z0-9_\-]/g, '_')}_Term_${card.terminal}.docx`;
+    return streamRemoteFile(
+      targetUrl,
+      res,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      filename,
+      'attachment'
+    );
   } catch (error) {
+    console.error('[DownloadMarksCardDocxFile Error]:', error.message);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

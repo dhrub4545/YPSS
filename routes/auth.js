@@ -23,12 +23,23 @@ try {
   fs.mkdirSync(uploadDirectory, { recursive: true });
 } catch (_) {}
 
+const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+
+const imageFileFilter = (req, file, callback) => {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  if (ALLOWED_IMAGE_MIMES.has(file.mimetype) && (ALLOWED_IMAGE_EXTS.has(ext) || !ext)) {
+    return callback(null, true);
+  }
+  callback(new Error('Invalid image file type. Only JPG, PNG, and WebP are allowed.'));
+};
+
 const storage = multer.diskStorage({
   destination: (req, file, callback) => callback(null, uploadDirectory),
   filename: (req, file, callback) => {
     let ext = path.extname(file.originalname || '').toLowerCase();
-    if (!ext || ext === '.') {
-      ext = '.jpg';
+    if (!ALLOWED_IMAGE_EXTS.has(ext)) {
+      ext = file.mimetype === 'image/png' ? '.png' : file.mimetype === 'image/webp' ? '.webp' : '.jpg';
     }
     callback(null, `profile-${Date.now()}-${Math.random().toString(36).substring(2, 8)}${ext}`);
   },
@@ -36,6 +47,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
+  fileFilter: imageFileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
 });
 

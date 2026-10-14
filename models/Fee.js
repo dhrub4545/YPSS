@@ -68,4 +68,8 @@ FeeSchema.virtual('status').get(function () {
 FeeSchema.set('toJSON', { virtuals: true });
 FeeSchema.set('toObject', { virtuals: true });
 
+FeeSchema.index({ student: 1, academicYear: 1 });
+FeeSchema.index({ 'transactions.receiptNo': 1 });
+FeeSchema.index({ academicYear: 1, feeType: 1 });
+
 module.exports = mongoose.model('Fee', FeeSchema);

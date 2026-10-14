@@ -62,4 +62,7 @@ MarksSchema.pre('save', function (next) {
   next();
 });
 
+MarksSchema.index({ student: 1, subject: 1, terminal: 1, academicYear: 1 });
+MarksSchema.index({ class: 1, terminal: 1, academicYear: 1 });
+
 module.exports = mongoose.model('Marks', MarksSchema);

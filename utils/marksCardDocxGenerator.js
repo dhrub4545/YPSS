@@ -273,11 +273,48 @@ const generateStudentMarksCard = async ({
   const docxBuffer = zip.generate({ type: 'nodebuffer' });
   fs.writeFileSync(docxPath, docxBuffer);
 
-  await convertDocxToPdf(docxPath, pdfPath, {
+  const fallbackData = {
+    studentInfo: {
+      name: sName,
+      fatherName: fName,
+      className: cName,
+      rollNumber: rNo,
+      academicYear: yr,
+      totalWorkingDays,
+      totalPresentDays,
+      attendancePct,
+      totalFullMarks,
+      totalObtainedMarks,
+      percentage: `${overallPct.toFixed(2)}%`,
+      grade: hasFailedSubject ? 'F' : overallGradeObj.grade,
+      remarks: hasFailedSubject ? 'Needs Improvement' : overallGradeObj.remark,
+    },
+    marksList: subjectsList.map((subName, i) => {
+      const subMark = studentMarks.find((m) => m.subject?.trim()?.toLowerCase() === subName.trim().toLowerCase());
+      const obtained = subMark ? Number(subMark.marksObtained) : 0;
+      const highest = highestMarksBySubject[subName.trim().toLowerCase()] || obtained;
+      const fMarks = Number(dataMap[`sub${i + 1}fm`]) || 100;
+      const pMarks = Number(dataMap[`sub${i + 1}pm`]) || 40;
+      const pct = (obtained / Math.max(1, fMarks)) * 100;
+      const gradeObj = getGradingDetails(pct);
+      return {
+        subject: subName,
+        fullMarks: fMarks,
+        passMarks: pMarks,
+        marksObtained: subMark ? obtained : '—',
+        highestMarks: highest,
+        percentage: subMark ? pct.toFixed(1) : '—',
+        grade: subMark ? gradeObj.grade : '—',
+        remark: subMark ? gradeObj.remark : '—',
+      };
+    }),
+    terminal: termNum,
     className: classItem.name,
     subject: `Terminal ${termNum} Marks Card`,
     subtitle: `${student.user?.name || 'Student'} - Terminal ${termNum}`,
-  });
+  };
+
+  await convertDocxToPdf(docxPath, pdfPath, fallbackData);
 
   // Check for existing card record and delete old Cloudinary files to free storage quota
   const existingCard = await MarksCard.findOne({
@@ -310,11 +347,10 @@ const generateStudentMarksCard = async ({
       uploadToCloud(docxPath, 'ypss_marks_cards/docs'),
     ]);
   } finally {
-    // Zero Local Clutter: Delete local temporary files immediately after uploading to Cloudinary
+    // Delete local temporary files only if uploaded to Cloudinary, preserving them locally if cloud upload was skipped/failed
     try {
-      if (fs.existsSync(docxPath)) fs.unlinkSync(docxPath);
-      if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
-      console.log(`[CleanLocalFiles] Unlinked local temp files: ${docxPath}, ${pdfPath}`);
+      if (pdfCloudUrl && fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
+      if (docxCloudUrl && fs.existsSync(docxPath)) fs.unlinkSync(docxPath);
     } catch (cleanupErr) {
       console.warn('[CleanLocalFiles] Error unlinking temp files:', cleanupErr.message);
     }
@@ -358,6 +394,7 @@ const generateStudentMarksCard = async ({
 
   return {
     _id: cardRecord._id,
+    cardId: cardRecord._id,
     docxUrl: finalDocxUrl,
     pdfUrl: finalPdfUrl,
     studentName: studentNameStr,

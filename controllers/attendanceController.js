@@ -164,22 +164,17 @@ const markClassAttendance = async (req, res) => {
       remarks: r.remarks?.trim() || '',
     }));
 
-    let attendance = await Attendance.findOne({ class: classId, date: targetDate });
-
-    if (attendance) {
-      attendance.records = formattedRecords;
-      attendance.takenBy = req.user._id;
-      if (dateBs) attendance.dateBs = dateBs;
-      await attendance.save();
-    } else {
-      attendance = await Attendance.create({
-        class: classId,
-        date: targetDate,
-        dateBs: dateBs || '',
-        takenBy: req.user._id,
-        records: formattedRecords,
-      });
-    }
+    let attendance = await Attendance.findOneAndUpdate(
+      { class: classId, date: targetDate },
+      {
+        $set: {
+          records: formattedRecords,
+          takenBy: req.user._id,
+          ...(dateBs ? { dateBs } : {}),
+        },
+      },
+      { new: true, upsert: true }
+    );
 
     await attendance.populate('takenBy', 'name role username');
 
@@ -206,6 +201,12 @@ const getStudentAttendance = async (req, res) => {
 
     if (!studentRecord) {
       return res.status(404).json({ success: false, message: 'Student profile not found' });
+    }
+
+    if (req.user.role === 'parent') {
+      if (!studentRecord.parent || String(studentRecord.parent) !== String(req.user._id)) {
+        return res.status(403).json({ success: false, message: 'You are only authorized to view attendance for your linked children' });
+      }
     }
 
     // Find all attendance records for this student's class

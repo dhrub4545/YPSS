@@ -37,4 +37,9 @@ const StudentSchema = new mongoose.Schema({
   },
 });
 
+StudentSchema.index({ user: 1 }, { unique: true });
+StudentSchema.index({ class: 1, academicYear: 1 });
+StudentSchema.index({ class: 1, rollNumber: 1, academicYear: 1 });
+StudentSchema.index({ parent: 1 });
+
 module.exports = mongoose.model('Student', StudentSchema);

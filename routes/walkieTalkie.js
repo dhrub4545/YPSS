@@ -22,11 +22,21 @@ try {
   fs.mkdirSync(uploadDirectory, { recursive: true });
 } catch (_) {}
 
+const ALLOWED_AUDIO_EXTS = new Set(['.m4a', '.mp3', '.wav', '.aac', '.ogg', '.webm']);
+
+const audioFileFilter = (req, file, callback) => {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  if (file.mimetype.startsWith('audio/') || ALLOWED_AUDIO_EXTS.has(ext)) {
+    return callback(null, true);
+  }
+  callback(new Error('Invalid audio file type. Only audio recordings are permitted.'));
+};
+
 const storage = multer.diskStorage({
   destination: (req, file, callback) => callback(null, uploadDirectory),
   filename: (req, file, callback) => {
     let ext = path.extname(file.originalname || '').toLowerCase();
-    if (!ext || ext === '.') {
+    if (!ALLOWED_AUDIO_EXTS.has(ext)) {
       ext = '.m4a';
     }
     callback(null, `voice-${Date.now()}-${Math.random().toString(36).substring(2, 8)}${ext}`);
@@ -35,6 +45,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
+  fileFilter: audioFileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for audio clips
 });
 

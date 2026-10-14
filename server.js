@@ -69,13 +69,26 @@ app.use(async (req, res, next) => {
   }
 });
 
+// Security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
 // Serve uploaded files statically (fallback to os.tmpdir when in serverless)
 const path = require('path');
 const os = require('os');
 const uploadsStaticDir = process.env.VERCEL
   ? path.join(os.tmpdir(), 'ypss_uploads')
   : path.join(__dirname, 'uploads');
-app.use('/uploads', express.static(uploadsStaticDir));
+app.use('/uploads', express.static(uploadsStaticDir, {
+  setHeaders: (res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+  },
+}));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));

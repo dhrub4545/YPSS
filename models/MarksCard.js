@@ -76,5 +76,7 @@ const MarksCardSchema = new mongoose.Schema({
 });
 
 MarksCardSchema.index({ student: 1, class: 1, terminal: 1, academicYear: 1 }, { unique: true });
+MarksCardSchema.index({ class: 1, terminal: 1, academicYear: 1 });
+MarksCardSchema.index({ student: 1, isPublished: 1 });
 
 module.exports = mongoose.model('MarksCard', MarksCardSchema);

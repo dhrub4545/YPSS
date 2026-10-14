@@ -12,14 +12,15 @@ const Notice = require('../models/Notice');
 const checkAndTriggerMonthlyFeeNotifications = async (force = false) => {
   try {
     const today = new Date();
-    const isFirstDay = today.getDate() === 1;
+    const nepaliDate = new NepaliDate(today);
+    const isFirstDay = nepaliDate.getDate() === 1;
 
-    // Only run on the 1st day of the month unless explicitly forced by manual/cron trigger
+    // Only run on the 1st day of the Nepali month unless explicitly forced by manual/cron trigger
     if (!isFirstDay && !force) {
-      return { triggered: false, count: 0, reason: 'Not 1st day of month' };
+      return { triggered: false, count: 0, reason: 'Not 1st day of Nepali month' };
     }
 
-    const nepaliDateStr = new NepaliDate(today).format('YYYY-MM-DD');
+    const nepaliDateStr = nepaliDate.format('YYYY-MM-DD');
     const targetDateBS = `${nepaliDateStr} B.S.`;
 
     const students = await Student.find().populate('user class parent');

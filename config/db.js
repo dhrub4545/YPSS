@@ -8,13 +8,7 @@ try {
   console.warn('Warning: Could not set custom DNS servers:', err.message);
 }
 
-// Direct replica set connection string for Cluster0 that bypasses flaky Windows DNS SRV queries
-const DIRECT_REPLICA_URI = 'mongodb://panditdhrub0_db_user:bmHYqQBIqYP7pwaI@ac-luhjmom-shard-00-00.ipqtphp.mongodb.net:27017,ac-luhjmom-shard-00-01.ipqtphp.mongodb.net:27017,ac-luhjmom-shard-00-02.ipqtphp.mongodb.net:27017/test?ssl=true&replicaSet=atlas-nrgb8e-shard-0&authSource=admin';
-
-/**
- * Global connection cache for serverless environments (Vercel Lambdas).
- * Preserves the active Mongoose connection across warm invocations.
- */
+// Global connection cache for serverless environments (Vercel Lambdas)
 let cached = global.mongoose;
 if (!cached) {
   cached = global.mongoose = { conn: null, promise: null };
@@ -27,9 +21,16 @@ const connectDB = async () => {
   }
 
   if (!cached.promise) {
-    const connectionString = process.env.MONGO_URI || process.env.MONGO_DB_ATLAS || DIRECT_REPLICA_URI;
+    const connectionString = process.env.MONGO_URI || process.env.MONGO_DB_ATLAS;
+    if (!connectionString) {
+      throw new Error('FATAL: MONGO_URI is not defined in environment variables.');
+    }
+
     const opts = {
       serverSelectionTimeoutMS: 15000,
+      maxPoolSize: process.env.VERCEL ? 10 : 30,
+      minPoolSize: 1,
+      socketTimeoutMS: 45000,
     };
 
     cached.promise = (async () => {
@@ -39,11 +40,12 @@ const connectDB = async () => {
         return conn;
       } catch (error) {
         console.error(`Database connection error: ${error.message}`);
-        // If SRV lookup failed (querySrv ECONNREFUSED), automatically retry with direct replica set hosts
-        if (error.message.includes('querySrv') || error.message.includes('ECONNREFUSED') || error.code === 'ECONNREFUSED') {
+        // If SRV lookup failed (querySrv ECONNREFUSED) and direct URI is available in env, retry
+        const directUri = process.env.MONGO_URI_DIRECT || process.env.MONGO_URI;
+        if (directUri && directUri !== connectionString && (error.message.includes('querySrv') || error.message.includes('ECONNREFUSED') || error.code === 'ECONNREFUSED')) {
           try {
-            console.log('Retrying with direct MongoDB Atlas replica set hosts...');
-            const conn = await mongoose.connect(DIRECT_REPLICA_URI, opts);
+            console.log('Retrying with direct MongoDB Atlas replica set hosts from environment...');
+            const conn = await mongoose.connect(directUri, opts);
             console.log(`MongoDB Connected (via direct replica set): ${conn.connection.host}`);
             return conn;
           } catch (directErr) {
