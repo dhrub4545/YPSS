@@ -430,11 +430,72 @@ const publishClassMarksCards = async (req, res) => {
     );
 
     const publishedCount = updateResult.modifiedCount !== undefined ? updateResult.modifiedCount : updateResult.n || 0;
+    const matchedCount = updateResult.matchedCount !== undefined ? updateResult.matchedCount : updateResult.n || 0;
+
+    let notificationSentCount = 0;
+
+    // Dispatch notifications ONLY to selected class students and their linked parents
+    if (publishedCount > 0 || matchedCount > 0) {
+      try {
+        const Notice = require('../models/Notice');
+        const nd = require('nepali-date-converter');
+        const NepaliDate = nd.default || nd;
+        const { notifyMarksCardsPublished } = require('../utils/pushNotifier');
+
+        const classItem = await Class.findById(classId).select('name');
+        const className = classItem?.name || 'Class';
+
+        // Find all students enrolled in this class
+        const students = await Student.find({ class: classId }).select('user parent rollNumber').lean();
+
+        const targetUserIds = [];
+        students.forEach((s) => {
+          if (s.user) targetUserIds.push(s.user.toString());
+          if (s.parent) targetUserIds.push(s.parent.toString());
+        });
+
+        const uniqueTargetUserIds = [...new Set(targetUserIds)];
+
+        if (uniqueTargetUserIds.length > 0) {
+          const nepaliDateStr = new NepaliDate(new Date()).format('YYYY-MM-DD');
+          const noticeTitle = `🎖️ Result Published: ${className} - Terminal ${terminal}`;
+          const noticeContent = `Dear Students & Parents,\n\nThe official Marks Cards / Report Cards for ${className} (Terminal ${terminal}, Academic Year ${yr}) have been verified and published by the Principal.\n\nYou can now view and download your complete marks card directly from your student or parent portal under the "Reports" section.\n\n— Yashoda Prem Shishu Sadan Administration`;
+
+          // Create targeted in-portal notice visible only to this class students and parents
+          const notice = await Notice.create({
+            title: noticeTitle,
+            content: noticeContent,
+            category: 'exam',
+            audience: 'individual',
+            targetUsers: uniqueTargetUserIds,
+            postedBy: req.user?._id || null,
+            dateBS: `${nepaliDateStr} B.S.`,
+          });
+
+          // Dispatch push notification directly to selected class students & parents
+          notifyMarksCardsPublished({
+            className,
+            terminal,
+            academicYear: yr,
+            targetUserIds: uniqueTargetUserIds,
+            noticeId: notice._id,
+            sender: req.user,
+          }).catch((err) => {
+            console.warn('[MarksController] Push notification dispatch failed:', err.message);
+          });
+
+          notificationSentCount = uniqueTargetUserIds.length;
+        }
+      } catch (notifyErr) {
+        console.warn('[MarksController] Failed to send marks card publication notification:', notifyErr.message);
+      }
+    }
 
     return res.json({
       success: true,
-      message: `Successfully published ${publishedCount} marks cards for Terminal ${terminal}.`,
+      message: `Successfully published marks cards for Terminal ${terminal}. Notifications dispatched to ${notificationSentCount} student and parent accounts of this class.`,
       publishedCount,
+      notificationSentCount,
     });
   } catch (error) {
     console.error('[PublishClassMarksCards Error]:', error.message);

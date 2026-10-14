@@ -181,9 +181,65 @@ const notifyNoticePublished = async ({ notice, sender }) => {
   }
 };
 
+const notifyMarksCardsPublished = async ({ className, terminal, academicYear, targetUserIds, noticeId, sender }) => {
+  try {
+    if (!Array.isArray(targetUserIds) || targetUserIds.length === 0) return;
+
+    const query = {
+      _id: { $in: targetUserIds },
+      pushTokens: { $exists: true, $not: { $size: 0 } },
+    };
+    if (sender?._id) {
+      query._id = { $in: targetUserIds, $ne: sender._id };
+    }
+
+    const targetUsers = await User.find(query).select('pushTokens name role');
+    if (!targetUsers.length) {
+      console.log(`[PushNotifier] No registered push tokens found for ${className} students/parents.`);
+      return;
+    }
+
+    const title = `🎖️ Result Published: ${className} - Terminal ${terminal}`;
+    const body = `Official marks cards for ${className} (Terminal ${terminal}) have been published! Tap to view your report card.`;
+
+    const pushMessages = [];
+    for (const u of targetUsers) {
+      if (Array.isArray(u.pushTokens)) {
+        for (const token of u.pushTokens) {
+          if (token && typeof token === 'string' && (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken'))) {
+            pushMessages.push({
+              to: token,
+              sound: 'default',
+              title,
+              body,
+              priority: 'high',
+              channelId: 'school-notices',
+              data: {
+                type: 'marks_card',
+                noticeId: noticeId ? noticeId.toString() : undefined,
+                className,
+                terminal,
+                academicYear,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    if (pushMessages.length > 0) {
+      await sendExpoPushNotifications(pushMessages);
+      console.log(`[PushNotifier] Dispatched marks card publish push notifications to ${pushMessages.length} devices.`);
+    }
+  } catch (err) {
+    console.warn('[PushNotifier] notifyMarksCardsPublished error:', err.message);
+  }
+};
+
 module.exports = {
   sendExpoPushNotifications,
   notifyWalkieTalkieDispatch,
   notifyNoticePublished,
+  notifyMarksCardsPublished,
 };
 
