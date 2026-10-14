@@ -15,10 +15,14 @@ const getParents = async (req, res) => {
   try {
     const parents = await User.find({ role: 'parent' }).select('-password').sort({ name: 1 }).lean();
     const populatedParents = await Promise.all(parents.map(async (parent) => {
-      const children = await Student.find({ parent: parent._id }).populate({ path: 'user', select: 'username name profilePicture photo' }).lean();
+      const children = await Student.find({ parent: parent._id })
+        .populate({ path: 'user', select: 'username name profilePicture photo phone' })
+        .populate('class', 'name')
+        .lean();
       return {
         ...parent,
-        studentUsernames: children.map(child => child.user?.username).filter(Boolean)
+        studentUsernames: children.map(child => child.user?.username).filter(Boolean),
+        children
       };
     }));
     return res.json({ success: true, data: populatedParents });
