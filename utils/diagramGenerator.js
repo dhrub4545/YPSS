@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const { getGeminiApiKeys, markKeyExhausted } = require('./geminiParser');
+const { getGeminiApiKeys, markKeyExhausted, getDynamicGeminiModels, invalidateModelCache } = require('./geminiParser');
 const cloudinary = require('cloudinary').v2;
 
 if (process.env.CLOUDINARY_CLOUD_NAME) {
@@ -192,14 +192,7 @@ IF THIS IS A GEOMETRY DIAGRAM / HANDWRITTEN SHAPE:
 Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`\`svg ... \`\`\` tags without extra conversational text.`;
   }
 
-  const modelsToTry = [
-    'gemini-3.5-flash-lite',
-    'gemini-flash-lite-latest',
-    'gemini-3.8-flash',
-    'gemini-3.7-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-3.5-flash',
-  ];
+  const modelsToTry = await getDynamicGeminiModels(apiKeys[0]);
 
   let svgText = '';
 
@@ -240,6 +233,7 @@ Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`
   }
 
   if (!svgText || !svgText.includes('<svg')) {
+    invalidateModelCache();
     throw new Error('Failed to generate SVG from diagram image.');
   }
 

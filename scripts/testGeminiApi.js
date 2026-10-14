@@ -27,14 +27,10 @@ async function testGeminiModels() {
     process.exit(1);
   }
 
-  const testModels = [
-    'gemini-3.5-flash-lite',
-    'gemini-flash-lite-latest',
-    'gemini-3.1-flash-lite',
-    'gemini-3.8-flash',
-    'gemini-3.7-flash',
-  ];
-  console.log(`[TEST] Targeted Models: ${testModels.join(', ')}`);
+  const { getDynamicGeminiModels } = require('../utils/geminiModelResolver');
+  const dynamicModels = await getDynamicGeminiModels(apiKeys[0]);
+  const testModels = dynamicModels.slice(0, 4);
+  console.log(`[TEST] Auto-Discovered & Prioritized Models: ${testModels.join(', ')}`);
 
   const testResults = {};
 

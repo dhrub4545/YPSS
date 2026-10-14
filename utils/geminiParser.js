@@ -2,6 +2,7 @@ require('dotenv').config();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
+const { getDynamicGeminiModels, invalidateModelCache } = require('./geminiModelResolver');
 
 const fileToGenerativePart = async (filePathOrUrl, mimeType) => {
   if (typeof filePathOrUrl === 'string' && (filePathOrUrl.startsWith('http://') || filePathOrUrl.startsWith('https://'))) {
@@ -187,14 +188,7 @@ Do not include markdown code block backticks.
 
   let result = null;
   let lastError = null;
-  const modelsToTry = [
-    'gemini-3.5-flash-lite',
-    'gemini-flash-lite-latest',
-    'gemini-3.8-flash',
-    'gemini-3.7-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-3.5-flash',
-  ];
+  const modelsToTry = await getDynamicGeminiModels(apiKeys[0]);
 
   for (const mName of modelsToTry) {
     for (let i = 0; i < apiKeys.length; i++) {
@@ -224,7 +218,8 @@ Do not include markdown code block backticks.
   }
 
   if (!result) {
-    throw new Error(`All Gemini models (${modelsToTry.join(', ')}) across ${apiKeys.length} API keys failed. Last error: ${lastError?.message}`);
+    invalidateModelCache();
+    throw new Error(`All Gemini models (${modelsToTry.slice(0, 5).join(', ')}) across ${apiKeys.length} API keys failed. Last error: ${lastError?.message}`);
   }
 
   const responseText = result.response.text().trim();
@@ -321,4 +316,6 @@ module.exports = {
   getGeminiApiKeys,
   isKeyExhausted,
   markKeyExhausted,
+  getDynamicGeminiModels,
+  invalidateModelCache,
 };
