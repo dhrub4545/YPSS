@@ -187,7 +187,14 @@ Do not include markdown code block backticks.
 
   let result = null;
   let lastError = null;
-  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.7-flash'];
+  const modelsToTry = [
+    'gemini-3.5-flash-lite',
+    'gemini-flash-lite-latest',
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash',
+  ];
 
   for (const mName of modelsToTry) {
     for (let i = 0; i < apiKeys.length; i++) {
@@ -198,7 +205,11 @@ Do not include markdown code block backticks.
           model: mName,
           generationConfig: { maxOutputTokens: 8192 },
         });
-        result = await model.generateContent([prompt, ...imageParts]);
+        const callPromise = model.generateContent([prompt, ...imageParts]);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout after 25s for model ${mName}`)), 25000)
+        );
+        result = await Promise.race([callPromise, timeoutPromise]);
         console.log(`Successfully generated content using model ${mName} and Gemini API key #${i + 1}`);
         break;
       } catch (error) {

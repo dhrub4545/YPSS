@@ -192,7 +192,14 @@ IF THIS IS A GEOMETRY DIAGRAM / HANDWRITTEN SHAPE:
 Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`\`svg ... \`\`\` tags without extra conversational text.`;
   }
 
-  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.7-flash'];
+  const modelsToTry = [
+    'gemini-3.5-flash-lite',
+    'gemini-flash-lite-latest',
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash',
+  ];
 
   let svgText = '';
 
@@ -207,7 +214,11 @@ Return ONLY the valid SVG XML code block wrapped in \`\`\`xml ... \`\`\` or \`\`
             generationConfig: { maxOutputTokens: 8192 },
           });
           const imagePart = await fileToGenerativePart(imagePath);
-          const result = await model.generateContent([prompt, imagePart]);
+          const callPromise = model.generateContent([prompt, imagePart]);
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout after 25s for model ${mName}`)), 25000)
+          );
+          const result = await Promise.race([callPromise, timeoutPromise]);
           svgText = result.response.text();
           if (svgText && svgText.includes('<svg')) {
             console.log(`Successfully generated diagram SVG using model ${mName} and Gemini API key #${i + 1}`);
