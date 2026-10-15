@@ -1,4 +1,9 @@
 const User = require('../models/User');
+const {
+  isFcmConfigured,
+  sendFcmWalkieTalkieDispatch,
+  sendFcmNoticeNotification,
+} = require('./fcmNotifier');
 
 const sendExpoPushNotifications = async (messages) => {
   if (!Array.isArray(messages) || messages.length === 0) return;
@@ -60,25 +65,31 @@ const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration,
 
     const body = `🎙️ ${sender.name} sent a ${duration || 3}s voice dispatch. Tap ▶️ to listen!`;
 
-    const pushMessages = [];
+    const fcmTokens = [];
+    const expoPushMessages = [];
+
     for (const u of targetUsers) {
       if (Array.isArray(u.pushTokens)) {
         for (const token of u.pushTokens) {
-          if (token && typeof token === 'string' && (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken'))) {
-            pushMessages.push({
-              to: token,
-              sound: 'default',
-              title,
-              body,
+          if (!token || typeof token !== 'string') continue;
+          const cleanToken = token.trim();
+          if (cleanToken.startsWith('ExponentPushToken') || cleanToken.startsWith('ExpoPushToken')) {
+            // Data-only Headless Background Notification for Expo Push Relay
+            expoPushMessages.push({
+              to: cleanToken,
               priority: 'high',
               channelId: 'walkie-talkie',
+              categoryId: 'walkie_talkie_voice',
               categoryIdentifier: 'walkie_talkie_voice',
               contentAvailable: true,
+              _contentAvailable: true,
+              mutableContent: true,
               _displayInForeground: true,
-              badge: 1,
-              subtitle: 'Voice Dispatch',
+              ttl: 3600,
               data: {
                 type: 'walkie-talkie',
+                title,
+                body,
                 messageId: messageId ? messageId.toString() : undefined,
                 senderId: sender._id ? sender._id.toString() : undefined,
                 senderName: sender.name,
@@ -88,13 +99,29 @@ const notifyWalkieTalkieDispatch = async ({ sender, type, recipientId, duration,
                 dispatchType: type,
               },
             });
+          } else {
+            // Native Direct FCM Device Token (obtained via Notifications.getDevicePushTokenAsync)
+            fcmTokens.push(cleanToken);
           }
         }
       }
     }
 
-    if (pushMessages.length > 0) {
-      await sendExpoPushNotifications(pushMessages);
+    // 1. Dispatch directly to native Android devices using Google Firebase Cloud Messaging (FCM)
+    if (fcmTokens.length > 0) {
+      await sendFcmWalkieTalkieDispatch({
+        fcmTokens,
+        sender,
+        type,
+        duration,
+        audioUrl: fullAudioUrl,
+        messageId,
+      });
+    }
+
+    // 2. Dispatch to devices registered via Expo Push Token
+    if (expoPushMessages.length > 0) {
+      await sendExpoPushNotifications(expoPushMessages);
     }
   } catch (err) {
     console.warn('[PushNotifier] notifyWalkieTalkieDispatch error:', err.message);
@@ -152,13 +179,16 @@ const notifyNoticePublished = async ({ notice, sender }) => {
     const cleanContent = (notice.content || '').replace(/\s+/g, ' ').trim();
     const body = cleanContent.length > 120 ? cleanContent.slice(0, 117) + '...' : cleanContent;
 
-    const pushMessages = [];
+    const fcmTokens = [];
+    const expoPushMessages = [];
     for (const u of targetUsers) {
       if (Array.isArray(u.pushTokens)) {
         for (const token of u.pushTokens) {
-          if (token && typeof token === 'string' && (token.startsWith('ExponentPushToken') || token.startsWith('ExpoPushToken'))) {
-            pushMessages.push({
-              to: token,
+          if (!token || typeof token !== 'string') continue;
+          const cleanToken = token.trim();
+          if (cleanToken.startsWith('ExponentPushToken') || cleanToken.startsWith('ExpoPushToken')) {
+            expoPushMessages.push({
+              to: cleanToken,
               sound: 'default',
               title,
               body,
@@ -172,13 +202,23 @@ const notifyNoticePublished = async ({ notice, sender }) => {
                 dateBS: notice.dateBS,
               },
             });
+          } else {
+            fcmTokens.push(cleanToken);
           }
         }
       }
     }
 
-    if (pushMessages.length > 0) {
-      await sendExpoPushNotifications(pushMessages);
+    if (fcmTokens.length > 0) {
+      await sendFcmNoticeNotification({
+        fcmTokens,
+        notice,
+        sender,
+      });
+    }
+
+    if (expoPushMessages.length > 0) {
+      await sendExpoPushNotifications(expoPushMessages);
     }
   } catch (err) {
     console.warn('[PushNotifier] notifyNoticePublished error:', err.message);
