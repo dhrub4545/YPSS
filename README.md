@@ -43,7 +43,7 @@ Managing a K-12 academic institution in South Asia presents complex challenges:
 
 - 🤖 **Gemini AI Bilingual Question Paper Engine:** 
   - Generates exam papers in **English** and **Nepali** (authentic Devanagari Unicode).
-  - Multi-key rotation (`GEMINI_API_KEY_1`, `2`, `3`) with dynamic model resolution (`gemini-flash-lite-latest`, `gemini-3.5-flash`).
+  - Multi-key rotation (`GEMINI_API_KEY_1`, `2`, `3`) with dynamic model resolution (`gemini-3.8-flash`).
   - Asynchronous background worker with progress tracking (`/api/questions/tracker`) and automatic failure recovery.
 - 📐 **AI Scientific Diagram & Geometry Generator:**
   - AI synthesizes SVG vector code for complex geometric proofs, electrical circuits, and biological apparatuses.
@@ -143,7 +143,7 @@ sequenceDiagram
     Note over API,Resolver: Resolve active Gemini model & select fresh API key
     API->>Resolver: Request optimal model
     Resolver->>Gemini: Check ModelService capability
-    Resolver-->>API: Selected: gemini-flash-lite-latest (Key #1)
+    Resolver-->>API: Selected: gemini-3.8-flash (Key #1)
 
     API->>Gemini: Multimodal prompt with syllabus / textbook images
     Gemini-->>API: Extracted structured JSON (Questions, Options, Marks)
