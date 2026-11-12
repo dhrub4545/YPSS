@@ -4,7 +4,7 @@
 
 <img src="./assets/logo.png" alt="YPSS School ERP Logo" width="180" />
 
-# Yagyodaya Public Secondary School ERP
+# Yashoda Prem Shishu Sadan ERP
 ### *Enterprise Academic Operations • Google Gemini AI Bilingual Question Paper Engine • Automated 4-Term Marks Cards • Nepali Calendar Monthly Fee Scheduler • Real-Time Walkie-Talkie Broadcasting*
 
 <br />
