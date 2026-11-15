@@ -33,7 +33,7 @@ function getTemplateBackgroundBuffer(termNum) {
   // Fallback: extract directly from the Word .docx template
   const TEMPLATE_FILES = {
     1: 'first_term_markscard.docx',
-    2: 'Second_term_markscard.docx',
+    2: 'second_term_markscard.docx',
     3: 'third_term_markscard.docx',
     4: 'final_term_markscard.docx',
   };
@@ -43,6 +43,8 @@ function getTemplateBackgroundBuffer(termNum) {
     path.join(__dirname, '../Markscardtemplate', docxName),
     path.join(process.cwd(), 'Markscardtemplate', docxName),
     path.join(process.cwd(), 'backend/Markscardtemplate', docxName),
+    path.join(__dirname, '../Markscardtemplate', num === 2 ? 'Second_term_markscard.docx' : docxName),
+    path.join(process.cwd(), 'backend/Markscardtemplate', num === 2 ? 'Second_term_markscard.docx' : docxName),
   ];
 
   for (const dp of candidateDocxPaths) {
@@ -50,8 +52,9 @@ function getTemplateBackgroundBuffer(termNum) {
       try {
         const PizZip = require('pizzip');
         const zip = new PizZip(fs.readFileSync(dp));
-        if (zip.files['word/media/image2.png']) {
-          return zip.files['word/media/image2.png'].asNodeBuffer();
+        const imgKey = Object.keys(zip.files).find((k) => k.startsWith('word/media/image') && !k.endsWith('.xml'));
+        if (imgKey && zip.files[imgKey]) {
+          return zip.files[imgKey].asNodeBuffer();
         }
       } catch (_) {}
     }
@@ -130,21 +133,23 @@ const generateMarksCardPDF = (studentInfo, marksList = [], terminal = 1, outputP
       const yr = String(studentInfo.academicYear || '2083 B.S.');
       const sec = String(studentInfo.section || 'A');
 
-      // Line 1: Student Name & Roll No (baseline ~256 pt)
-      doc.text(sName, 125, 245, { width: 180, lineBreak: false });
-      doc.text(rNo, 425, 245, { width: 140, lineBreak: false });
+      // Line 1: Student Name & Roll No (baseline ~202 pt)
+      doc.text(sName, 131, 202, { width: 200, lineBreak: false });
+      doc.text(rNo, 421, 202, { width: 140, lineBreak: false });
 
-      // Line 2: Father Name & Academic Year (baseline ~275 pt)
-      doc.text(fName, 125, 264, { width: 180, lineBreak: false });
-      doc.text(yr, 425, 264, { width: 140, lineBreak: false });
+      // Line 2: Father Name & Academic Year (baseline ~220 pt)
+      doc.text(fName, 131, 220, { width: 200, lineBreak: false });
+      doc.text(yr, 421, 220, { width: 140, lineBreak: false });
 
-      // Line 3: Class & Section (baseline ~294 pt)
-      doc.text(cName, 125, 283, { width: 80, lineBreak: false });
-      doc.text(sec, 425, 283, { width: 80, lineBreak: false });
+      // Line 3: Class & Section (baseline ~237 pt)
+      doc.text(cName, 131, 237, { width: 150, lineBreak: false });
+      if (sec && sec !== '—' && sec !== 'A') {
+        doc.text(sec, 421, 237, { width: 100, lineBreak: false });
+      }
 
-      // 3. Subject Rows (Rows 1 to 10)
-      const rowY = [341, 364, 387, 410, 433, 456, 480, 503, 526, 549];
-      const validMarks = marksList.slice(0, 10);
+      // 3. Subject Rows (Rows 1 to 15)
+      const rowY = [293, 310.5, 328, 346, 364.5, 382.5, 400, 418, 436.5, 455.5, 473, 491, 508.8, 526.8, 545.2];
+      const validMarks = marksList.slice(0, 15);
 
       validMarks.forEach((sub, i) => {
         const y = rowY[i];
@@ -156,40 +161,40 @@ const generateMarksCardPDF = (studentInfo, marksList = [], terminal = 1, outputP
         const rmk = sub.remark || sub.remarks || (om !== '—' && Number(om) < Number(pm) ? 'Fail' : 'Good');
 
         // Subject Name
-        doc.font('Helvetica-Bold').fontSize(9.5).text(subName, 64, y, { width: 100, lineBreak: false });
+        doc.font('Helvetica-Bold').fontSize(9.5).text(subName, 68, y, { width: 175, lineBreak: false });
         // Pass Marks
-        doc.font('Helvetica').fontSize(10).text(pm, 168, y, { width: 72, align: 'center', lineBreak: false });
+        doc.font('Helvetica').fontSize(10).text(pm, 250, y, { width: 55, align: 'center', lineBreak: false });
         // Full Marks
-        doc.font('Helvetica').fontSize(10).text(fm, 240, y, { width: 77, align: 'center', lineBreak: false });
+        doc.font('Helvetica').fontSize(10).text(fm, 307, y, { width: 55, align: 'center', lineBreak: false });
         // Obtained Marks
-        doc.font('Helvetica-Bold').fontSize(10).text(om, 318, y, { width: 88, align: 'center', lineBreak: false });
+        doc.font('Helvetica-Bold').fontSize(10).text(om, 366, y, { width: 62, align: 'center', lineBreak: false });
         // Highest Marks
-        doc.font('Helvetica').fontSize(10).text(hm, 406, y, { width: 86, align: 'center', lineBreak: false });
+        doc.font('Helvetica').fontSize(10).text(hm, 432, y, { width: 62, align: 'center', lineBreak: false });
         // Remarks
-        doc.font('Helvetica').fontSize(9).text(rmk, 494, y, { width: 72, align: 'center', lineBreak: false });
+        doc.font('Helvetica').fontSize(9.5).text(rmk, 498, y, { width: 62, align: 'center', lineBreak: false });
       });
 
       // 4. Summary Table (Bottom Left)
       const summaryX = 168;
-      const summaryW = 149;
+      const summaryW = 153;
       doc.font('Helvetica-Bold').fontSize(10);
-      doc.text(String(studentInfo.totalFullMarks || '—'), summaryX, 581, { width: summaryW, align: 'center', lineBreak: false });
-      doc.text(String(studentInfo.totalObtainedMarks || '—'), summaryX, 601, { width: summaryW, align: 'center', lineBreak: false });
-      doc.text(String(studentInfo.percentage || '—'), summaryX, 620, { width: summaryW, align: 'center', lineBreak: false });
-      doc.text(String(studentInfo.grade || '—'), summaryX, 640, { width: summaryW, align: 'center', lineBreak: false });
-      doc.text(String(studentInfo.remarks || '—'), summaryX, 681, { width: summaryW, align: 'center', lineBreak: false });
+      doc.text(String(studentInfo.totalFullMarks || '—'), summaryX, 577, { width: summaryW, align: 'center', lineBreak: false });
+      doc.text(String(studentInfo.totalObtainedMarks || '—'), summaryX, 595, { width: summaryW, align: 'center', lineBreak: false });
+      doc.text(String(studentInfo.percentage || '—'), summaryX, 612, { width: summaryW, align: 'center', lineBreak: false });
+      doc.text(String(studentInfo.grade || '—'), summaryX, 630, { width: summaryW, align: 'center', lineBreak: false });
+      doc.text(String(studentInfo.remarks || '—'), 167, 667, { width: 153, align: 'center', lineBreak: false });
 
       // 5. Attendance (Bottom Left)
       const attX = 130;
-      const attW = 49;
+      const attW = 47;
       const twd = studentInfo.totalWorkingDays !== undefined && studentInfo.totalWorkingDays !== null ? String(studentInfo.totalWorkingDays) : '—';
       const tdp = studentInfo.totalPresentDays !== undefined && studentInfo.totalPresentDays !== null ? String(studentInfo.totalPresentDays) : '—';
       const per = studentInfo.attendancePct !== undefined && studentInfo.attendancePct !== null ? `${studentInfo.attendancePct}%` : '—';
 
       doc.font('Helvetica-Bold').fontSize(9.5);
-      doc.text(twd, attX, 736, { width: attW, align: 'center', lineBreak: false });
-      doc.text(tdp, attX, 758, { width: attW, align: 'center', lineBreak: false });
-      doc.text(per, attX, 782, { width: attW, align: 'center', lineBreak: false });
+      doc.text(twd, attX, 730, { width: attW, align: 'center', lineBreak: false });
+      doc.text(tdp, attX, 752, { width: attW, align: 'center', lineBreak: false });
+      doc.text(per, attX, 774, { width: attW, align: 'center', lineBreak: false });
     } else {
       drawFallbackMarksCard(doc, studentInfo, marksList, terminal);
     }

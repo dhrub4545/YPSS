@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const Student = require('../models/Student');
+const User = require('../models/User');
 const Class = require('../models/Class');
 const Marks = require('../models/Marks');
 const ExamConfig = require('../models/ExamConfig');
@@ -13,7 +14,7 @@ const { uploadToCloud, deleteFromCloud } = require('./cloudStorage');
 
 const TEMPLATE_FILES = {
   1: 'first_term_markscard.docx',
-  2: 'Second_term_markscard.docx',
+  2: 'second_term_markscard.docx',
   3: 'third_term_markscard.docx',
   4: 'final_term_markscard.docx',
 };
@@ -34,8 +35,8 @@ const getGradingDetails = (percentage) => {
 const cleanDocxXmlPlaceholders = (xml, dataMap) => {
   let cleaned = xml;
 
-  // Remove embedded rId5 drawing runs ({sub1} vector image) inside <w:txbxContent> textboxes
-  cleaned = cleaned.replace(/(<w:txbxContent>[^]*?)(<w:r\b[^>]*>(?:(?!<\/w:r>)[^])*?rId5(?:(?!<\/w:r>)[^])*?<\/w:r>)/g, (match, prefix) => prefix);
+  // Remove embedded rId5 drawing runs ({sub1} vector image) inside <w:txbxContent> textboxes without crossing boundaries
+  cleaned = cleaned.replace(/(<w:txbxContent>(?:(?!<\/w:txbxContent>)[^])*?)(<w:r\b[^>]*>(?:(?!<\/w:r>)[^])*?rId5(?:(?!<\/w:r>)[^])*?<\/w:r>)/g, (match, prefix) => prefix);
 
   // Strip Word proofing error tags
   cleaned = cleaned.replace(/<w:proofErr[^>]*\/>/g, '').replace(/<w:noProof[^>]*\/>/g, '');
@@ -179,7 +180,7 @@ const generateStudentMarksCard = async ({
   let totalObtainedMarks = 0;
   let hasFailedSubject = false;
 
-  for (let i = 1; i <= 10; i++) {
+  for (let i = 1; i <= 15; i++) {
     const subName = subjectsList[i - 1];
 
     if (subName) {
@@ -245,6 +246,8 @@ const generateStudentMarksCard = async ({
     path.join(__dirname, '../Markscardtemplate', templateFileName),
     path.join(process.cwd(), 'Markscardtemplate', templateFileName),
     path.join(process.cwd(), 'backend/Markscardtemplate', templateFileName),
+    path.join(__dirname, '../Markscardtemplate', termNum === 2 ? 'Second_term_markscard.docx' : templateFileName),
+    path.join(process.cwd(), 'backend/Markscardtemplate', termNum === 2 ? 'Second_term_markscard.docx' : templateFileName),
   ];
   const templatePath = candidateTemplatePaths.find((p) => fs.existsSync(p));
   if (!templatePath) {
@@ -257,7 +260,10 @@ const generateStudentMarksCard = async ({
   zip.file('word/document.xml', updatedXml);
 
   const os = require('os');
-  const baseTmp = process.env.VERCEL ? os.tmpdir() : path.join(__dirname, '..');
+  const baseTmp =
+    process.env.VERCEL || process.env.NODE_ENV === 'production' || !fs.existsSync(path.join(__dirname, '../uploads'))
+      ? os.tmpdir()
+      : path.join(__dirname, '..');
   const outputDirDocx = path.join(baseTmp, 'uploads/markscards/docs');
   const outputDirPdf = path.join(baseTmp, 'uploads/markscards/pdf');
   try {
@@ -411,4 +417,242 @@ const generateStudentMarksCard = async ({
   };
 };
 
-module.exports = { generateStudentMarksCard };
+const generateClassMarksCardsDocx = async ({
+  classId,
+  terminal,
+  academicYear = '2083 B.S.',
+}) => {
+  const termNum = Number(terminal);
+  if (!TEMPLATE_FILES[termNum]) {
+    throw new Error(`Invalid terminal examination term: ${terminal}`);
+  }
+
+  const classItem = await Class.findById(classId);
+  if (!classItem) {
+    throw new Error('Class record not found');
+  }
+
+  const students = await Student.find({ class: classId })
+    .populate({ path: 'user', select: 'name username' })
+    .populate({ path: 'parent', select: 'name' });
+
+  if (!students.length) {
+    throw new Error('No students enrolled in this class');
+  }
+
+  // Sort students ascending by numeric roll number where possible
+  students.sort((a, b) => {
+    const rollA = parseInt(String(a.rollNumber || '0').replace(/\D/g, ''), 10) || 0;
+    const rollB = parseInt(String(b.rollNumber || '0').replace(/\D/g, ''), 10) || 0;
+    if (rollA !== rollB) return rollA - rollB;
+    return String(a.user?.name || a.name || '').localeCompare(String(b.user?.name || b.name || ''));
+  });
+
+  const yrStr = String(academicYear || '2083').replace(/\s*B\.S\./i, '').trim();
+  const yrPattern = new RegExp(`^${yrStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+
+  const [allClassMarks, attendanceRecords, examConfigs, questionPapers] = await Promise.all([
+    Marks.find({
+      class: classItem._id,
+      terminal: termNum,
+      academicYear: yrPattern,
+    }),
+    Attendance.find({
+      class: classItem._id,
+    }),
+    ExamConfig.find({
+      class: classItem._id,
+      terminal: termNum,
+    }),
+    QuestionPaper.find({
+      class: classItem._id,
+      examTerm: termNum,
+    }),
+  ]);
+
+  const templateFileName = TEMPLATE_FILES[termNum];
+  const candidateTemplatePaths = [
+    path.join(__dirname, '../Markscardtemplate', templateFileName),
+    path.join(process.cwd(), 'Markscardtemplate', templateFileName),
+    path.join(process.cwd(), 'backend/Markscardtemplate', templateFileName),
+    path.join(__dirname, '../Markscardtemplate', termNum === 2 ? 'Second_term_markscard.docx' : templateFileName),
+    path.join(process.cwd(), 'backend/Markscardtemplate', termNum === 2 ? 'Second_term_markscard.docx' : templateFileName),
+  ];
+  const templatePath = candidateTemplatePaths.find((p) => fs.existsSync(p));
+  if (!templatePath) {
+    throw new Error(`Marks card template file not found: ${templateFileName}`);
+  }
+
+  const zip = new PizZip(fs.readFileSync(templatePath));
+  const templateXml = zip.file('word/document.xml').asText();
+  const bodyMatch = templateXml.match(/<w:body>([\s\S]*?)<\/w:body>/);
+  if (!bodyMatch) {
+    throw new Error('Failed to parse document body from template');
+  }
+  const bodyInner = bodyMatch[1];
+  const sectPrMatch = bodyInner.match(/<w:sectPr\b[\s\S]*?<\/w:sectPr>\s*$/);
+  const sectPr = sectPrMatch ? sectPrMatch[0] : '';
+  const cardBodyWithoutSectPr = bodyInner.replace(/<w:sectPr\b[\s\S]*?<\/w:sectPr>\s*$/, '');
+
+  const highestMarksBySubject = {};
+  allClassMarks.forEach((m) => {
+    const subName = m.subject?.trim()?.toLowerCase();
+    if (subName) {
+      const currentHighest = highestMarksBySubject[subName] || 0;
+      if (m.marksObtained > currentHighest) {
+        highestMarksBySubject[subName] = m.marksObtained;
+      }
+    }
+  });
+
+  const mergedSections = [];
+
+  students.forEach((student, idx) => {
+    const studentMarks = allClassMarks.filter(
+      (m) => String(m.student?._id || m.student) === String(student._id)
+    );
+
+    let totalWorkingDays = 120;
+    let totalPresentDays = 112;
+
+    if (attendanceRecords.length) {
+      totalWorkingDays = attendanceRecords.length;
+      let presentCount = 0;
+      attendanceRecords.forEach((rec) => {
+        const stAtt = rec.records?.find((r) => String(r.student) === String(student._id));
+        if (stAtt && stAtt.status === 'present') {
+          presentCount++;
+        }
+      });
+      if (presentCount > 0) totalPresentDays = presentCount;
+    }
+
+    const attendancePct = ((totalPresentDays / Math.max(1, totalWorkingDays)) * 100).toFixed(1);
+
+    const subjectsList = classItem.subjects?.length
+      ? classItem.subjects.map((s) => s.name)
+      : Array.from(new Set(studentMarks.map((m) => m.subject)));
+
+    const sName = student.user?.name || student.name || '—';
+    const fName = student.fatherName || student.parent?.name || '—';
+    const cName = classItem.name || 'Class';
+    const rNo = String(student.rollNumber || (idx + 1));
+    const yr = String(academicYear || '2083 B.S.').endsWith('B.S.') ? String(academicYear) : `${academicYear} B.S.`;
+
+    const dataMap = {
+      'name': sName,
+      'student name': sName,
+      'studentname': sName,
+      'student_name': sName,
+      'father name': fName,
+      'fathername': fName,
+      'father_name': fName,
+      'class name': cName,
+      'classname': cName,
+      'class_name': cName,
+      'RollNo': rNo,
+      'rollno': rNo,
+      'roll_no': rNo,
+      'year': yr,
+      'academicyear': yr,
+      'academic_year': yr,
+      'TWD': String(totalWorkingDays),
+      'TDP': String(totalPresentDays),
+      'PER': `${attendancePct}%`,
+    };
+
+    let totalFullMarks = 0;
+    let totalObtainedMarks = 0;
+    let hasFailedSubject = false;
+
+    for (let i = 1; i <= 15; i++) {
+      const subName = subjectsList[i - 1];
+
+      if (subName) {
+        const subMark = studentMarks.find((m) => m.subject?.trim()?.toLowerCase() === subName.trim().toLowerCase());
+
+        let fMarks = subMark?.fullMarks || 100;
+        let pMarks = subMark?.passMarks || 40;
+
+        if (!subMark) {
+          const config = examConfigs.find((c) => c.subject?.trim()?.toLowerCase() === subName.trim().toLowerCase());
+          if (config) {
+            fMarks = config.fullMarks;
+            pMarks = config.passMarks;
+          } else {
+            const qp = questionPapers.find((q) => q.subject?.trim()?.toLowerCase() === subName.trim().toLowerCase());
+            if (qp) {
+              fMarks = qp.fullMarks || 100;
+              pMarks = qp.passMarks || 40;
+            }
+          }
+        }
+
+        const obtained = subMark ? Number(subMark.marksObtained) : 0;
+        const highest = highestMarksBySubject[subName.trim().toLowerCase()] || obtained;
+
+        totalFullMarks += fMarks;
+        totalObtainedMarks += obtained;
+
+        const subPct = (obtained / Math.max(1, fMarks)) * 100;
+        const subGradeObj = getGradingDetails(subPct);
+
+        if (obtained < pMarks) {
+          hasFailedSubject = true;
+        }
+
+        dataMap[`sub${i}`] = subName;
+        dataMap[`sub${i}fm`] = String(fMarks);
+        dataMap[`sub${i}pm`] = String(pMarks);
+        dataMap[`sub${i}om`] = subMark ? String(obtained) : '—';
+        dataMap[`sub${i}hm`] = String(highest);
+        dataMap[`sub${i}rmk`] = subMark ? subGradeObj.grade : '—';
+      } else {
+        dataMap[`sub${i}`] = '';
+        dataMap[`sub${i}fm`] = '';
+        dataMap[`sub${i}pm`] = '';
+        dataMap[`sub${i}om`] = '';
+        dataMap[`sub${i}hm`] = '';
+        dataMap[`sub${i}rmk`] = '';
+      }
+    }
+
+    const overallPct = totalFullMarks > 0 ? (totalObtainedMarks / totalFullMarks) * 100 : 0;
+    const overallGradeObj = getGradingDetails(overallPct);
+
+    dataMap['totalfullmarks'] = String(totalFullMarks);
+    dataMap['totalobtainedmarks'] = String(totalObtainedMarks);
+    dataMap['percentage'] = `${overallPct.toFixed(2)}%`;
+    dataMap['grade'] = hasFailedSubject ? 'F' : overallGradeObj.grade;
+    dataMap['remarks'] = hasFailedSubject ? 'Needs Improvement' : overallGradeObj.remark;
+
+    let studentXml = cleanDocxXmlPlaceholders(cardBodyWithoutSectPr, dataMap);
+    const idOffset = (idx + 1) * 100000;
+    studentXml = studentXml.replace(/id="(\d+)"/g, (match, idStr) => {
+      return `id="${parseInt(idStr, 10) + idOffset}"`;
+    });
+
+    if (idx < students.length - 1) {
+      mergedSections.push(studentXml + `<w:p><w:pPr>${sectPr}</w:pPr></w:p>`);
+    } else {
+      mergedSections.push(studentXml + sectPr);
+    }
+  });
+
+  const finalMergedXml = templateXml.replace(/<w:body>[\s\S]*?<\/w:body>/, `<w:body>${mergedSections.join('')}</w:body>`);
+  zip.file('word/document.xml', finalMergedXml);
+
+  const docxBuffer = zip.generate({ type: 'nodebuffer' });
+  const safeClassName = (classItem.name || 'Class').replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const filename = `YPSS_${safeClassName}_Term_${termNum}_All_MarksCards.docx`;
+
+  return {
+    buffer: docxBuffer,
+    filename,
+    className: classItem.name,
+    terminal: termNum,
+    studentCount: students.length,
+  };
+};
+
+module.exports = { generateStudentMarksCard, generateClassMarksCardsDocx };

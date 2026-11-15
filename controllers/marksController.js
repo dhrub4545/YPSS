@@ -162,6 +162,7 @@ const downloadMarksCard = async (req, res) => {
   try {
     const student = await Student.findById(req.params.studentId)
       .populate({ path: 'user', select: 'name' })
+      .populate({ path: 'parent', select: 'name' })
       .populate('class');
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
@@ -180,13 +181,42 @@ const downloadMarksCard = async (req, res) => {
     try {
       fs.mkdirSync(temporaryDirectory, { recursive: true });
     } catch (_) {}
-    const downloadName = `YPSS_${student.user.name.replace(/\s+/g, '_')}_Terminal_${terminal}.pdf`;
+    const downloadName = `YPSS_${(student.user?.name || 'Student').replace(/\s+/g, '_')}_Terminal_${terminal}.pdf`;
     const outputPath = path.join(temporaryDirectory, `${student._id}_${terminal}_${Date.now()}.pdf`);
+
+    const fName = student.fatherName || student.parent?.name || '—';
+    let totalFullMarks = 0;
+    let totalObtainedMarks = 0;
+    let hasFailed = false;
+    marksList.forEach((m) => {
+      const fm = Number(m.fullMarks || 100);
+      const pm = Number(m.passMarks || 40);
+      const om = Number(m.marksObtained || 0);
+      totalFullMarks += fm;
+      totalObtainedMarks += om;
+      if (om < pm) hasFailed = true;
+    });
+    const pct = totalFullMarks > 0 ? (totalObtainedMarks / totalFullMarks) * 100 : 0;
+    const gradeDetails = pct >= 90 ? { grade: 'A+', remark: 'Outstanding' }
+      : pct >= 80 ? { grade: 'A', remark: 'Excellent' }
+      : pct >= 70 ? { grade: 'B+', remark: 'Very Good' }
+      : pct >= 60 ? { grade: 'B', remark: 'Good' }
+      : pct >= 50 ? { grade: 'C+', remark: 'Satisfactory' }
+      : pct >= 40 ? { grade: 'C', remark: 'Acceptable' }
+      : pct >= 35 ? { grade: 'D', remark: 'Basic' }
+      : { grade: 'NG', remark: 'Needs Improvement' };
+
     await generateMarksCardPDF({
-      name: student.user.name,
+      name: student.user?.name || student.name || 'Student',
+      fatherName: fName,
       rollNumber: student.rollNumber,
       className: student.class?.name || 'Class',
       academicYear,
+      totalFullMarks,
+      totalObtainedMarks,
+      percentage: `${pct.toFixed(2)}%`,
+      grade: hasFailed ? 'F' : gradeDetails.grade,
+      remarks: hasFailed ? 'Needs Improvement' : gradeDetails.remark,
     }, marksList, terminal, outputPath);
 
     res.download(outputPath, downloadName, () => {
@@ -224,11 +254,14 @@ const setExamConfig = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You are not assigned to this subject' });
     }
 
+    const yrStr = String(academicYear).replace(/\s*B\.S\./i, '').trim();
+    const yrPattern = new RegExp(`^${escapeRegex(yrStr)}`, 'i');
+
     let config = await ExamConfig.findOne({
       class: classItem._id,
-      subject: classSubject.name,
+      subject: new RegExp(`^${escapeRegex(classSubject.name)}$`, 'i'),
       terminal: Number(terminal),
-      academicYear: academicYear.trim(),
+      academicYear: yrPattern,
     });
 
     if (config) {
@@ -248,6 +281,19 @@ const setExamConfig = async (req, res) => {
       });
     }
 
+    // Keep existing marks in sync for this exam if any were already entered
+    await Marks.updateMany(
+      {
+        class: classItem._id,
+        subject: new RegExp(`^${escapeRegex(classSubject.name)}$`, 'i'),
+        terminal: Number(terminal),
+        academicYear: yrPattern,
+      },
+      {
+        $set: { fullMarks: fMarks, passMarks: pMarks },
+      }
+    );
+
     return res.json({ success: true, data: config });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -262,11 +308,14 @@ const getExamConfig = async (req, res) => {
   }
 
   try {
+    const yrStr = String(academicYear).replace(/\s*B\.S\./i, '').trim();
+    const yrPattern = new RegExp(`^${escapeRegex(yrStr)}`, 'i');
+
     let config = await ExamConfig.findOne({
       class: classId,
-      subject: subject.trim(),
+      subject: new RegExp(`^${escapeRegex(subject.trim())}$`, 'i'),
       terminal: Number(terminal),
-      academicYear: academicYear.trim(),
+      academicYear: yrPattern,
     });
 
     if (!config) {
@@ -298,7 +347,7 @@ const getExamConfig = async (req, res) => {
   }
 };
 
-const { generateStudentMarksCard } = require('../utils/marksCardDocxGenerator');
+const { generateStudentMarksCard, generateClassMarksCardsDocx } = require('../utils/marksCardDocxGenerator');
 const MarksCard = require('../models/MarksCard');
 
 const generateMarksCard = async (req, res) => {
@@ -803,6 +852,31 @@ const downloadMarksCardDocxFile = async (req, res) => {
   }
 };
 
+const downloadClassMarksCardsDocxFile = async (req, res) => {
+  const classId = req.params.classId || req.query.classId || req.body?.classId;
+  const terminal = req.query.terminal || req.body?.terminal || 1;
+  const academicYear = req.query.academicYear || req.body?.academicYear || '2083 B.S.';
+
+  if (!classId) {
+    return res.status(400).json({ success: false, message: 'classId is required' });
+  }
+
+  try {
+    const result = await generateClassMarksCardsDocx({
+      classId,
+      terminal: Number(terminal),
+      academicYear,
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    return res.send(result.buffer);
+  } catch (error) {
+    console.error('[DownloadClassMarksCardsDocxFile Error]:', error.message);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   enterMarks,
   getStudentMarks,
@@ -817,4 +891,5 @@ module.exports = {
   getStudentPublishedCards,
   viewMarksCardPdf,
   downloadMarksCardDocxFile,
+  downloadClassMarksCardsDocxFile,
 };

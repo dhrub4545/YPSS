@@ -14,6 +14,7 @@ const {
   getStudentPublishedCards,
   viewMarksCardPdf,
   downloadMarksCardDocxFile,
+  downloadClassMarksCardsDocxFile,
 } = require('../controllers/marksController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -27,6 +28,7 @@ router.get('/class-cards-status', protect, authorize('principal', 'teacher'), ge
 router.get('/student-published-cards/:studentId', protect, getStudentPublishedCards);
 router.get('/card-pdf/:cardId', protect, viewMarksCardPdf);
 router.get('/card-docx/:cardId', protect, downloadMarksCardDocxFile);
+router.get('/class-docx/:classId', protect, authorize('principal', 'teacher'), downloadClassMarksCardsDocxFile);
 router.get('/student/:studentId', protect, getStudentMarks);
 router.get('/class/:classId', protect, authorize('principal', 'teacher'), getClassMarks);
 router.get('/student/:studentId/download', protect, downloadMarksCard);
