@@ -158,7 +158,29 @@ const generateMarksCardPDF = (studentInfo, marksList = [], terminal = 1, outputP
         const fm = sub.fullMarks !== undefined ? String(sub.fullMarks) : '100';
         const om = sub.marksObtained !== undefined && sub.marksObtained !== null ? String(sub.marksObtained) : '—';
         const hm = sub.highestMarks !== undefined ? String(sub.highestMarks) : om;
-        const rmk = sub.remark || sub.remarks || (om !== '—' && Number(om) < Number(pm) ? 'Fail' : 'Good');
+        let rmk = sub.remark || sub.remarks;
+        if (!rmk) {
+          if (om === '—' || om === null || om === undefined) {
+            rmk = '—';
+          } else {
+            const numOm = Number(om);
+            const numPm = Number(pm);
+            const numFm = Number(fm) || 100;
+            if (numOm < numPm) {
+              rmk = 'Needs Improvement';
+            } else {
+              const pct = (numOm / Math.max(1, numFm)) * 100;
+              if (pct >= 90) rmk = 'Outstanding';
+              else if (pct >= 80) rmk = 'Excellent';
+              else if (pct >= 70) rmk = 'Very Good';
+              else if (pct >= 60) rmk = 'Good';
+              else if (pct >= 50) rmk = 'Satisfactory';
+              else if (pct >= 40) rmk = 'Acceptable';
+              else if (pct >= 35) rmk = 'Basic';
+              else rmk = 'Needs Improvement';
+            }
+          }
+        }
 
         // Subject Name
         doc.font('Helvetica-Bold').fontSize(9.5).text(subName, 68, y, { width: 175, lineBreak: false });
@@ -171,7 +193,8 @@ const generateMarksCardPDF = (studentInfo, marksList = [], terminal = 1, outputP
         // Highest Marks
         doc.font('Helvetica').fontSize(10).text(hm, 432, y, { width: 62, align: 'center', lineBreak: false });
         // Remarks
-        doc.font('Helvetica').fontSize(9.5).text(rmk, 498, y, { width: 62, align: 'center', lineBreak: false });
+        const rmkFontSize = rmk.length > 13 ? 7 : (rmk.length > 9 ? 8 : 9.5);
+        doc.font('Helvetica').fontSize(rmkFontSize).text(rmk, 498, y, { width: 62, align: 'center', lineBreak: false });
       });
 
       // 4. Summary Table (Bottom Left)

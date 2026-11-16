@@ -221,7 +221,8 @@ const generateStudentMarksCard = async ({
       dataMap[`sub${i}pm`] = String(pMarks);
       dataMap[`sub${i}om`] = subMark ? String(obtained) : '—';
       dataMap[`sub${i}hm`] = String(highest);
-      dataMap[`sub${i}rmk`] = subMark ? subGradeObj.grade : '—';
+      const subRemark = obtained < pMarks ? 'Needs Improvement' : subGradeObj.remark;
+      dataMap[`sub${i}rmk`] = subMark ? subRemark : '—';
     } else {
       dataMap[`sub${i}`] = '';
       dataMap[`sub${i}fm`] = '';
@@ -303,6 +304,7 @@ const generateStudentMarksCard = async ({
       const pMarks = Number(dataMap[`sub${i + 1}pm`]) || 40;
       const pct = (obtained / Math.max(1, fMarks)) * 100;
       const gradeObj = getGradingDetails(pct);
+      const subRemark = obtained < pMarks ? 'Needs Improvement' : gradeObj.remark;
       return {
         subject: subName,
         fullMarks: fMarks,
@@ -311,7 +313,7 @@ const generateStudentMarksCard = async ({
         highestMarks: highest,
         percentage: subMark ? pct.toFixed(1) : '—',
         grade: subMark ? gradeObj.grade : '—',
-        remark: subMark ? gradeObj.remark : '—',
+        remark: subMark ? subRemark : '—',
       };
     }),
     terminal: termNum,
@@ -606,7 +608,8 @@ const generateClassMarksCardsDocx = async ({
         dataMap[`sub${i}pm`] = String(pMarks);
         dataMap[`sub${i}om`] = subMark ? String(obtained) : '—';
         dataMap[`sub${i}hm`] = String(highest);
-        dataMap[`sub${i}rmk`] = subMark ? subGradeObj.grade : '—';
+        const subRemark = obtained < pMarks ? 'Needs Improvement' : subGradeObj.remark;
+        dataMap[`sub${i}rmk`] = subMark ? subRemark : '—';
       } else {
         dataMap[`sub${i}`] = '';
         dataMap[`sub${i}fm`] = '';
