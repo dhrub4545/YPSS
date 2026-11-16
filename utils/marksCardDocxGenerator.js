@@ -48,6 +48,98 @@ const cleanDocxXmlPlaceholders = (xml, dataMap) => {
     return `{${normalized}}`;
   });
 
+  // Ensure table shapes are formatted cleanly with bold subjects/obtained marks, widened widths, and proper font sizing matching PDF
+  cleaned = cleaned.replace(/<w:drawing>(?:(?!<\/w:drawing>)[\s\S])*?<\/w:drawing>/g, (shapeXml) => {
+    // Subject Names: {sub1} ... {sub15}
+    if (/\{sub(?:1[0-5]|[1-9])\}/.test(shapeXml)) {
+      let s = shapeXml;
+      s = s.replace(/<wp:extent\b[^>]*\/>/, '<wp:extent cx="2350000" cy="266700"/>');
+      s = s.replace(/<a:ext\b[^>]*\/>/, '<a:ext cx="2350000" cy="266700"/>');
+      s = s.replace(/<wps:bodyPr\b([^>]*)>/, (m, attrs) => {
+        let a = attrs.replace(/\bwrap="[^"]*"/, 'wrap="none"')
+                     .replace(/\blIns="[^"]*"/, 'lIns="20000"')
+                     .replace(/\brIns="[^"]*"/, 'rIns="20000"');
+        if (!a.includes('wrap=')) a += ' wrap="none"';
+        if (!a.includes('lIns=')) a += ' lIns="20000"';
+        if (!a.includes('rIns=')) a += ' rIns="20000"';
+        return `<wps:bodyPr${a}>`;
+      });
+      s = s.replace(/<w:rPr>([\s\S]*?)<\/w:rPr>/g, (m, inner) => {
+        let inr = inner;
+        if (!inr.includes('<w:b/>') && !inr.includes('<w:b ')) inr = '<w:b/><w:bCs/>' + inr;
+        if (!inr.includes('<w:sz ')) inr = '<w:sz w:val="19"/><w:szCs w:val="19"/>' + inr;
+        if (!inr.includes('<w:rFonts ')) inr = '<w:rFonts w:ascii="Helvetica" w:hAnsi="Helvetica" w:cs="Helvetica"/>' + inr;
+        return `<w:rPr>${inr}</w:rPr>`;
+      });
+      return s;
+    }
+
+    // Obtained Marks: {sub1om} ... {sub15om}
+    if (/\{sub(?:1[0-5]|[1-9])om\}/.test(shapeXml)) {
+      let s = shapeXml;
+      s = s.replace(/<w:pPr>([\s\S]*?)<\/w:pPr>/g, (m, inner) => {
+        let inr = inner;
+        if (!inr.includes('<w:jc ')) inr += '<w:jc w:val="center"/>';
+        return `<w:pPr>${inr}</w:pPr>`;
+      });
+      s = s.replace(/<w:rPr>([\s\S]*?)<\/w:rPr>/g, (m, inner) => {
+        let inr = inner;
+        if (!inr.includes('<w:b/>') && !inr.includes('<w:b ')) inr = '<w:b/><w:bCs/>' + inr;
+        if (!inr.includes('<w:sz ')) inr = '<w:sz w:val="20"/><w:szCs w:val="20"/>' + inr;
+        if (!inr.includes('<w:rFonts ')) inr = '<w:rFonts w:ascii="Helvetica" w:hAnsi="Helvetica" w:cs="Helvetica"/>' + inr;
+        return `<w:rPr>${inr}</w:rPr>`;
+      });
+      return s;
+    }
+
+    // Remarks: {sub1rmk} ... {sub15rmk}
+    if (/\{sub(?:1[0-5]|[1-9])rmk\}/.test(shapeXml)) {
+      let s = shapeXml;
+      s = s.replace(/<wp:extent\b[^>]*\/>/, '<wp:extent cx="1200000" cy="266700"/>');
+      s = s.replace(/<a:ext\b[^>]*\/>/, '<a:ext cx="1200000" cy="266700"/>');
+      s = s.replace(/<wps:bodyPr\b([^>]*)>/, (m, attrs) => {
+        let a = attrs.replace(/\bwrap="[^"]*"/, 'wrap="none"')
+                     .replace(/\blIns="[^"]*"/, 'lIns="10000"')
+                     .replace(/\brIns="[^"]*"/, 'rIns="10000"');
+        if (!a.includes('wrap=')) a += ' wrap="none"';
+        if (!a.includes('lIns=')) a += ' lIns="10000"';
+        if (!a.includes('rIns=')) a += ' rIns="10000"';
+        return `<wps:bodyPr${a}>`;
+      });
+      s = s.replace(/<w:pPr>([\s\S]*?)<\/w:pPr>/g, (m, inner) => {
+        let inr = inner;
+        if (!inr.includes('<w:jc ')) inr += '<w:jc w:val="center"/>';
+        return `<w:pPr>${inr}</w:pPr>`;
+      });
+      s = s.replace(/<w:rPr>([\s\S]*?)<\/w:rPr>/g, (m, inner) => {
+        let inr = inner;
+        if (!inr.includes('<w:sz ')) inr = '<w:sz w:val="17"/><w:szCs w:val="17"/>' + inr;
+        if (!inr.includes('<w:rFonts ')) inr = '<w:rFonts w:ascii="Helvetica" w:hAnsi="Helvetica" w:cs="Helvetica"/>' + inr;
+        return `<w:rPr>${inr}</w:rPr>`;
+      });
+      return s;
+    }
+
+    // Pass Marks, Full Marks, Highest Marks
+    if (/\{sub(?:1[0-5]|[1-9])(?:pm|fm|hm)\}/.test(shapeXml)) {
+      let s = shapeXml;
+      s = s.replace(/<w:pPr>([\s\S]*?)<\/w:pPr>/g, (m, inner) => {
+        let inr = inner;
+        if (!inr.includes('<w:jc ')) inr += '<w:jc w:val="center"/>';
+        return `<w:pPr>${inr}</w:pPr>`;
+      });
+      s = s.replace(/<w:rPr>([\s\S]*?)<\/w:rPr>/g, (m, inner) => {
+        let inr = inner;
+        if (!inr.includes('<w:sz ')) inr = '<w:sz w:val="20"/><w:szCs w:val="20"/>' + inr;
+        if (!inr.includes('<w:rFonts ')) inr = '<w:rFonts w:ascii="Helvetica" w:hAnsi="Helvetica" w:cs="Helvetica"/>' + inr;
+        return `<w:rPr>${inr}</w:rPr>`;
+      });
+      return s;
+    }
+
+    return shapeXml;
+  });
+
   // Sort keys by length DESCENDING so longer composite tags ('totalobtainedmarks', 'sub10rmk', 'sub1rmk') are replaced before short prefix keys ('sub10', 'sub1')
   const sortedKeys = Object.keys(dataMap).sort((a, b) => b.length - a.length);
 
